@@ -264,6 +264,10 @@ pub fn LoginPage() -> Element {
     let mut password = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let mut is_unverified_error = use_signal(|| false);
+    let mut resend_email = use_signal(String::new);
+    let mut resend_loading = use_signal(|| false);
+    let mut resend_success = use_signal(|| None::<String>);
 
     let mut login = move |_| {
         let user = username();
@@ -271,11 +275,14 @@ pub fn LoginPage() -> Element {
 
         if user.is_empty() || pass.is_empty() {
             error.set(Some("Please enter username and password".to_string()));
+            is_unverified_error.set(false);
             return;
         }
 
         is_loading.set(true);
         error.set(None);
+        is_unverified_error.set(false);
+        resend_success.set(None);
 
         spawn(async move {
             match api::auth::login(&user, &pass).await {
@@ -283,10 +290,41 @@ pub fn LoginPage() -> Element {
                     state::set_auth(response.user, response.token);
                 }
                 Err(e) => {
+                    let error_msg = format!("{}", e);
+                    // Check if this is an unverified email error
+                    if error_msg.contains("verify your email") || error_msg.contains("not verified") {
+                        is_unverified_error.set(true);
+                    }
                     error.set(Some(format!("Login failed: {}", e)));
                 }
             }
             is_loading.set(false);
+        });
+    };
+
+    let mut resend_verification = move |_| {
+        let email = resend_email();
+
+        if email.is_empty() {
+            error.set(Some("Please enter your email address".to_string()));
+            return;
+        }
+
+        resend_loading.set(true);
+        error.set(None);
+        resend_success.set(None);
+
+        spawn(async move {
+            match api::auth::resend_verification(&email).await {
+                Ok(response) => {
+                    resend_success.set(Some(response.message));
+                    resend_email.set(String::new());
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to resend verification: {}", e)));
+                }
+            }
+            resend_loading.set(false);
         });
     };
 
@@ -341,6 +379,47 @@ pub fn LoginPage() -> Element {
                         r#type: "submit",
                         disabled: *is_loading.read(),
                         if *is_loading.read() { "Signing in..." } else { "Sign In" }
+                    }
+                }
+
+                // Resend verification form (shown when unverified email error)
+                if *is_unverified_error.read() {
+                    div { class: "mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg",
+                        h3 { class: "text-sm font-medium text-yellow-800 mb-2", "Email Not Verified" }
+                        p { class: "text-sm text-yellow-700 mb-4",
+                            "Please verify your email address before logging in. Check your inbox for a verification link."
+                        }
+
+                        // Success message for resend
+                        if let Some(msg) = resend_success.read().as_ref() {
+                            div { class: "bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded mb-3 text-sm",
+                                "{msg}"
+                            }
+                        }
+
+                        // Resend verification form
+                        form {
+                            onsubmit: move |e| {
+                                e.prevent_default();
+                                resend_verification(e);
+                            },
+
+                            div { class: "flex gap-2",
+                                input {
+                                    class: "flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm",
+                                    r#type: "email",
+                                    placeholder: "Enter your email",
+                                    value: "{resend_email}",
+                                    oninput: move |e| resend_email.set(e.value()),
+                                }
+                                button {
+                                    class: "px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 font-medium disabled:opacity-50 text-sm",
+                                    r#type: "submit",
+                                    disabled: *resend_loading.read(),
+                                    if *resend_loading.read() { "Sending..." } else { "Resend Email" }
+                                }
+                            }
+                        }
                     }
                 }
 
