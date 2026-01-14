@@ -76,6 +76,19 @@ pub struct AcceptInvitationResponse {
     pub user: UserInfo,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetInvitationRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitationDetails {
+    pub email: String,
+    pub role: UserRole,
+    pub invited_by_username: String,
+    pub valid: bool,
+}
+
 /// User info returned to client (no password)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {

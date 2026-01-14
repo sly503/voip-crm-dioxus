@@ -3,7 +3,8 @@ use crate::models::{
     LoginRequest, LoginResponse, RegisterRequest, RegisterResponse,
     VerifyEmailRequest, VerifyEmailResponse, ResendVerificationRequest,
     ResendVerificationResponse, InviteUserRequest, InviteUserResponse,
-    AcceptInvitationRequest, AcceptInvitationResponse, UserRole,
+    AcceptInvitationRequest, AcceptInvitationResponse, GetInvitationRequest,
+    InvitationDetails, UserRole,
 };
 
 pub async fn login(username: &str, password: &str) -> Result<LoginResponse, ApiError> {
@@ -76,6 +77,18 @@ pub async fn invite_user(email: &str, role: UserRole) -> Result<InviteUserRespon
 
     let response: InviteUserResponse = api_client()
         .post("/api/auth/invite", &request)
+        .await?;
+
+    Ok(response)
+}
+
+pub async fn get_invitation_details(token: &str) -> Result<InvitationDetails, ApiError> {
+    let request = GetInvitationRequest {
+        token: token.to_string(),
+    };
+
+    let response: InvitationDetails = api_client()
+        .post("/api/auth/invitation-details", &request)
         .await?;
 
     Ok(response)

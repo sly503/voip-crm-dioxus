@@ -536,6 +536,66 @@ pub async fn invite_user(
     }))
 }
 
+/// Get invitation details - allows users to see invitation info before accepting
+#[derive(Debug, Serialize)]
+pub struct InvitationDetails {
+    pub email: String,
+    pub role: UserRole,
+    pub invited_by_username: String,
+    pub valid: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetInvitationRequest {
+    pub token: String,
+}
+
+pub async fn get_invitation_details(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GetInvitationRequest>,
+) -> Result<Json<InvitationDetails>, (StatusCode, Json<AuthError>)> {
+    // Get invitation by token
+    let invitation = db::invitations::get_invitation_by_token(&state.db, &req.token)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(AuthError { message: "Invalid invitation token".to_string() }),
+            )
+        })?;
+
+    let (email, role, invited_by_id, is_valid) = invitation;
+
+    // Get inviter's username
+    let inviter = db::users::get(&state.db, invited_by_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Inviter not found".to_string() }),
+            )
+        })?;
+
+    Ok(Json(InvitationDetails {
+        email,
+        role,
+        invited_by_username: inviter.username,
+        valid: is_valid,
+    }))
+}
+
 /// Register with invitation handler - allows users to register using an invitation token
 pub async fn register_invitation(
     State(state): State<Arc<AppState>>,

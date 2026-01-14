@@ -822,3 +822,248 @@ pub fn VerifyEmailPage(token: String) -> Element {
         }
     }
 }
+
+#[component]
+pub fn AcceptInvitationPage(token: String) -> Element {
+    let mut status = use_signal(|| "loading".to_string()); // loading, loaded, success, error
+    let mut message = use_signal(|| "Loading invitation details...".to_string());
+    let mut email = use_signal(String::new);
+    let mut role = use_signal(|| "Agent".to_string());
+    let mut invited_by = use_signal(String::new);
+    let mut username = use_signal(String::new);
+    let mut password = use_signal(String::new);
+    let mut confirm_password = use_signal(String::new);
+    let mut is_loading = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+
+    // Fetch invitation details on mount
+    use_effect(move || {
+        let token_clone = token.clone();
+        spawn(async move {
+            match api::auth::get_invitation_details(&token_clone).await {
+                Ok(details) => {
+                    if details.valid {
+                        email.set(details.email);
+                        role.set(format!("{:?}", details.role));
+                        invited_by.set(details.invited_by_username);
+                        status.set("loaded".to_string());
+                        message.set(String::new());
+                    } else {
+                        status.set("error".to_string());
+                        message.set("This invitation has expired or has already been used.".to_string());
+                    }
+                }
+                Err(e) => {
+                    status.set("error".to_string());
+                    message.set(format!("Failed to load invitation: {}", e));
+                }
+            }
+        });
+    });
+
+    // Client-side validation helper
+    let validate_password_strength = |password: &str| -> Result<(), String> {
+        if password.len() < 8 {
+            return Err("Password must be at least 8 characters".to_string());
+        }
+        if !password.chars().any(|c| c.is_numeric()) {
+            return Err("Password must contain at least one number".to_string());
+        }
+        if !password.chars().any(|c| c.is_alphabetic()) {
+            return Err("Password must contain at least one letter".to_string());
+        }
+        Ok(())
+    };
+
+    let accept_invite = move |_| {
+        let username_val = username();
+        let password_val = password();
+        let confirm_password_val = confirm_password();
+        let token_val = token.clone();
+
+        // Clear previous messages
+        error.set(None);
+
+        // Validate all fields
+        if username_val.is_empty() || password_val.is_empty() {
+            error.set(Some("Please fill in all required fields".to_string()));
+            return;
+        }
+
+        // Validate password strength
+        if let Err(e) = validate_password_strength(&password_val) {
+            error.set(Some(e));
+            return;
+        }
+
+        // Validate password match
+        if password_val != confirm_password_val {
+            error.set(Some("Passwords do not match".to_string()));
+            return;
+        }
+
+        is_loading.set(true);
+
+        spawn(async move {
+            match api::auth::accept_invitation(&token_val, &username_val, &password_val).await {
+                Ok(response) => {
+                    // Auto-login happens in the API call (token is stored)
+                    state::set_auth(response.user.clone(), response.token);
+                    status.set("success".to_string());
+                    message.set("Account created successfully! Redirecting to dashboard...".to_string());
+
+                    // Auto-redirect after 2 seconds
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        use gloo_timers::future::TimeoutFuture;
+                        TimeoutFuture::new(2000).await;
+                        // Navigation will happen automatically when AUTH_STATE updates
+                    }
+                }
+                Err(e) => {
+                    error.set(Some(format!("Registration failed: {}", e)));
+                    is_loading.set(false);
+                }
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "min-h-screen flex items-center justify-center bg-gray-100",
+            div { class: "bg-white rounded-lg shadow-lg p-8 w-full max-w-md",
+                // Logo
+                div { class: "text-center mb-8",
+                    span { class: "text-5xl", "\u{1F4DE}" }
+                    h1 { class: "text-2xl font-bold mt-4", "Accept Invitation" }
+                }
+
+                // Loading state
+                if status() == "loading" {
+                    div { class: "text-center py-8",
+                        div { class: "animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" }
+                        p { class: "text-gray-600", "{message()}" }
+                    }
+                }
+                // Success state
+                else if status() == "success" {
+                    div { class: "bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4",
+                        p { class: "font-medium", "✓ {message()}" }
+                    }
+                }
+                // Error state
+                else if status() == "error" {
+                    div {
+                        div { class: "bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6",
+                            p { class: "font-medium", "✗ {message()}" }
+                        }
+
+                        // Link to login
+                        div { class: "text-center mt-6",
+                            p { class: "text-gray-600",
+                                Link { to: Route::Login {}, class: "text-blue-600 hover:underline", "Back to Login" }
+                            }
+                        }
+                    }
+                }
+                // Loaded state - show registration form
+                else if status() == "loaded" {
+                    div {
+                        // Invitation info
+                        div { class: "bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6",
+                            p { class: "text-sm text-gray-700 mb-2",
+                                "You've been invited by "
+                                span { class: "font-semibold", "{invited_by()}" }
+                                " to join as "
+                                span { class: "font-semibold", "{role()}" }
+                            }
+                            p { class: "text-sm text-gray-600",
+                                "Email: "
+                                span { class: "font-medium", "{email()}" }
+                            }
+                        }
+
+                        // Error message
+                        if let Some(err) = error.read().as_ref() {
+                            div { class: "bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4",
+                                "{err}"
+                            }
+                        }
+
+                        // Registration form
+                        form {
+                            onsubmit: move |e| {
+                                e.prevent_default();
+                                accept_invite(());
+                            },
+
+                            // Username field
+                            div { class: "mb-4",
+                                label { class: "block text-gray-700 mb-2", "Username *" }
+                                input {
+                                    r#type: "text",
+                                    class: "w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                    placeholder: "Choose a username",
+                                    value: "{username()}",
+                                    oninput: move |e| username.set(e.value().clone()),
+                                    disabled: is_loading(),
+                                    required: true,
+                                }
+                            }
+
+                            // Password field
+                            div { class: "mb-4",
+                                label { class: "block text-gray-700 mb-2", "Password *" }
+                                input {
+                                    r#type: "password",
+                                    class: "w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                    placeholder: "At least 8 characters",
+                                    value: "{password()}",
+                                    oninput: move |e| password.set(e.value().clone()),
+                                    disabled: is_loading(),
+                                    required: true,
+                                }
+                                p { class: "text-xs text-gray-500 mt-1",
+                                    "Must be at least 8 characters with letters and numbers"
+                                }
+                            }
+
+                            // Confirm password field
+                            div { class: "mb-6",
+                                label { class: "block text-gray-700 mb-2", "Confirm Password *" }
+                                input {
+                                    r#type: "password",
+                                    class: "w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                    placeholder: "Re-enter your password",
+                                    value: "{confirm_password()}",
+                                    oninput: move |e| confirm_password.set(e.value().clone()),
+                                    disabled: is_loading(),
+                                    required: true,
+                                }
+                            }
+
+                            // Submit button
+                            button {
+                                r#type: "submit",
+                                class: "w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium",
+                                disabled: is_loading(),
+                                if is_loading() {
+                                    "Creating Account..."
+                                } else {
+                                    "Accept Invitation & Create Account"
+                                }
+                            }
+                        }
+
+                        // Link to login
+                        div { class: "text-center mt-6 pt-6 border-t",
+                            p { class: "text-gray-600 text-sm",
+                                "Already have an account? "
+                                Link { to: Route::Login {}, class: "text-blue-600 hover:underline", "Login" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

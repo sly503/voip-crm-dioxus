@@ -41,6 +41,9 @@ pub enum Route {
 
     #[route("/verify-email?:token")]
     VerifyEmail { token: String },
+
+    #[route("/accept-invitation?:token")]
+    AcceptInvitation { token: String },
 }
 
 // Route handler components
@@ -96,6 +99,13 @@ fn Register() -> Element {
 fn VerifyEmail(token: String) -> Element {
     rsx! {
         crate::VerifyEmailPage { token }
+    }
+}
+
+#[component]
+fn AcceptInvitation(token: String) -> Element {
+    rsx! {
+        crate::AcceptInvitationPage { token }
     }
 }
 
