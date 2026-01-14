@@ -125,8 +125,6 @@ fn run_app() {
 
 #[component]
 fn App() -> Element {
-    let auth_state = AUTH_STATE.read();
-
     rsx! {
         // Global styles
         style { {include_str!("../assets/styles.css")} }
@@ -134,19 +132,7 @@ fn App() -> Element {
         // Notification toast
         Notification {}
 
-        // Main content
-        if auth_state.is_authenticated() {
-            AuthenticatedApp {}
-        } else {
-            LoginPage {}
-        }
-    }
-}
-
-#[component]
-fn AuthenticatedApp() -> Element {
-    // Wrap everything in Router so Link components work
-    rsx! {
+        // Router wraps everything so Link components work everywhere
         Router::<Route> {}
     }
 }
@@ -155,6 +141,14 @@ fn AuthenticatedApp() -> Element {
 #[component]
 pub fn AppLayout() -> Element {
     let auth_state = AUTH_STATE.read();
+    let nav = use_navigator();
+
+    // Redirect to login if not authenticated
+    if !auth_state.is_authenticated() {
+        nav.push(Route::Login {});
+        return rsx! { div { "Redirecting to login..." } };
+    }
+
     let is_supervisor = auth_state.is_supervisor_or_above();
 
     rsx! {
@@ -260,6 +254,7 @@ fn Sidebar(is_supervisor: bool) -> Element {
 
 #[component]
 pub fn LoginPage() -> Element {
+    let nav = use_navigator();
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
@@ -288,6 +283,8 @@ pub fn LoginPage() -> Element {
             match api::auth::login(&user, &pass).await {
                 Ok(response) => {
                     state::set_auth(response.user, response.token);
+                    // Navigate to home after successful login
+                    nav.push(Route::Home {});
                 }
                 Err(e) => {
                     let error_msg = format!("{}", e);
@@ -714,7 +711,7 @@ pub fn VerifyEmailPage(token: String) -> Element {
         });
     });
 
-    let resend_verification = move |_| {
+    let mut resend_verification = move |_| {
         let email_val = email();
 
         if email_val.is_empty() {
@@ -836,9 +833,13 @@ pub fn AcceptInvitationPage(token: String) -> Element {
     let mut is_loading = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
+    // Clone token for use in multiple closures
+    let token_for_effect = token.clone();
+    let token_for_accept = token.clone();
+
     // Fetch invitation details on mount
     use_effect(move || {
-        let token_clone = token.clone();
+        let token_clone = token_for_effect.clone();
         spawn(async move {
             match api::auth::get_invitation_details(&token_clone).await {
                 Ok(details) => {
@@ -875,11 +876,11 @@ pub fn AcceptInvitationPage(token: String) -> Element {
         Ok(())
     };
 
-    let accept_invite = move |_| {
+    let mut accept_invite = move |_| {
         let username_val = username();
         let password_val = password();
         let confirm_password_val = confirm_password();
-        let token_val = token.clone();
+        let token_val = token_for_accept.clone();
 
         // Clear previous messages
         error.set(None);
