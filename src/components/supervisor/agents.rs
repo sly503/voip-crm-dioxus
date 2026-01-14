@@ -2,12 +2,14 @@ use dioxus::prelude::*;
 use crate::models::{Agent, AgentType, AgentStatus, CreateAgentRequest};
 use crate::api;
 use crate::components::common::{LoadingSpinner, Card};
+use crate::components::supervisor::InviteUserDialog;
 
 #[component]
 pub fn AgentList() -> Element {
     let mut agents = use_signal(Vec::<Agent>::new);
     let mut is_loading = use_signal(|| true);
     let mut show_create_modal = use_signal(|| false);
+    let mut show_invite_dialog = use_signal(|| false);
 
     // Fetch agents
     use_effect(move || {
@@ -29,10 +31,17 @@ pub fn AgentList() -> Element {
             // Header
             div { class: "flex items-center justify-between p-4 border-b",
                 h2 { class: "text-xl font-semibold", "Agents" }
-                button {
-                    class: "px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700",
-                    onclick: move |_| show_create_modal.set(true),
-                    "+ Add Agent"
+                div { class: "flex gap-2",
+                    button {
+                        class: "px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700",
+                        onclick: move |_| show_invite_dialog.set(true),
+                        "Invite User"
+                    }
+                    button {
+                        class: "px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700",
+                        onclick: move |_| show_create_modal.set(true),
+                        "+ Add Agent"
+                    }
                 }
             }
 
@@ -83,6 +92,16 @@ pub fn AgentList() -> Element {
                     on_created: move |a| {
                         agents.write().push(a);
                         show_create_modal.set(false);
+                    },
+                }
+            }
+
+            // Invite Dialog
+            if *show_invite_dialog.read() {
+                InviteUserDialog {
+                    on_close: move |_| show_invite_dialog.set(false),
+                    on_invited: move |_| {
+                        show_invite_dialog.set(false);
                     },
                 }
             }
