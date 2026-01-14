@@ -1,0 +1,127 @@
+[package]
+name = "voip-crm"
+version = "0.1.0"
+edition = "2021"
+authors = ["VoIP CRM Team"]
+description = "VoIP CRM - Full Rust Stack with Dioxus"
+license = "MIT"
+
+[dependencies]
+# Dioxus - UI framework
+# Note: Desktop build blocked by ashpd 0.11/zbus 5.x incompatibility
+# Web build works fine. Desktop requires dioxus to update to ashpd 0.12.x
+dioxus = { version = "0.7", features = ["router"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time - wasm compatible
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+
+# Server-side dependencies (native only)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+
+# Logging with env filter
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client for Telnyx API
+reqwest = { version = "0.12", features = ["json"] }
+
+# Web framework
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+
+# Authentication
+jsonwebtoken = "9"
+bcrypt = "0.17"
+
+# Environment
+dotenvy = "0.15"
+
+# UUIDs - server only (v4 needs rng)
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# AI Integration - Claude API
+async-trait = "0.1"
+
+# Audio processing for STT/TTS
+base64 = "0.22"
+
+# Streaming and async utilities
+tokio-stream = "0.1"
+futures = "0.3"
+
+# Background job scheduling
+tokio-cron-scheduler = "0.13"
+
+# For AI streaming responses
+eventsource-stream = "0.2"
+
+# SIP Stack - Pure Rust VoIP (using ftth-rsipstack without TLS/WebSocket complexity)
+ftth-rsipstack = "4.0"
+ftth-rsip = "0.4"
+
+# Random number generation (for RTP SSRC, etc.)
+rand = "0.8"
+
+# Byte manipulation for RTP packets
+bytes = "1"
+
+# Network interface detection
+get_if_addrs = "0.5"
+
+# Async utilities (CancellationToken)
+tokio-util = "0.7"
+
+# Audio playback for desktop (DTMF tones, ringtones)
+# Requires: sudo dnf install alsa-lib-devel (Fedora) or sudo apt install libasound2-dev (Ubuntu)
+tinyaudio = { version = "0.1", optional = true }
+
+# Client-side dependencies (wasm only)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# HTTP client for API calls - wasm compatible
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Location", "AudioContext", "OscillatorNode", "OscillatorType", "GainNode", "AudioDestinationNode", "AudioParam", "CustomEvent"] }
+js-sys = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+# UUID for wasm - no rng feature
+uuid = { version = "1", features = ["serde", "js"] }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+desktop-audio = ["desktop", "tinyaudio"]
+
+[[bin]]
+name = "voip-crm"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+opt-level = "z"
+
+[profile.dev]
+opt-level = 1
+
+# Patch ashpd to use 0.12.1 code (with zbus 5 fix) but version 0.11.0 for compatibility
+[patch.crates-io]
+ashpd = { path = "/home/fatjon2026/ashpd-patched" }

@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoIP CRM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div id="app"></div>
+
+    <script>
+        const API_URL = '';
+        let authToken = null;
+        let currentUser = null;
+
+        // API Helper
+        async function api(method, path, body = null) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+            const options = { method, headers };
+            if (body) options.body = JSON.stringify(body);
+
+            const response = await fetch(`${API_URL}${path}`, options);
+            if (!response.ok) {
+                const error = await response.text();
+                throw new Error(error || response.statusText);
+            }
+            return response.json();
+        }
+
+        // Render functions
+        function renderLogin() {
+            document.getElementById('app').innerHTML = `
+                <div class="min-h-screen flex items-center justify-center">
+                    <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md">
+                        <div class="text-center mb-8">
+                            <span class="text-5xl">&#128222;</span>
+                            <h1 class="text-2xl font-bold mt-4">VoIP CRM</h1>
+                            <p class="text-gray-500">Sign in to continue</p>
+                        </div>
+                        <div id="login-error" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4"></div>
+                        <form id="login-form">
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                                <input type="text" id="username" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your username">
+                            </div>
+                            <div class="mb-6">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                                <input type="password" id="password" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your password">
+                            </div>
+                            <button type="submit" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Sign In</button>
+                        </form>
+                        <div class="mt-6 text-center text-sm text-gray-500">
+                            <p>Demo credentials:</p>
+                            <p class="font-mono">admin / admin123</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('login-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+
+                try {
+                    const response = await api('POST', '/api/auth/login', { username, password });
+                    authToken = response.token;
+                    currentUser = response.user;
+                    localStorage.setItem('authToken', authToken);
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    renderDashboard();
+                } catch (err) {
+                    const errorDiv = document.getElementById('login-error');
+                    errorDiv.textContent = `Login failed: ${err.message}`;
+                    errorDiv.classList.remove('hidden');
+                }
+            });
+        }
+
+        function renderDashboard() {
+            const isSupervisor = currentUser.role === 'ADMIN' || currentUser.role === 'SUPERVISOR';
+
+            document.getElementById('app').innerHTML = `
+                <div class="h-screen flex flex-col">
+                    <!-- Top Bar -->
+                    <header class="bg-white border-b px-6 py-3 flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <span class="text-2xl">&#128222;</span>
+                            <h1 class="text-xl font-bold text-gray-800">VoIP CRM</h1>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="text-gray-600">Welcome, ${currentUser.username}</span>
+                            <button onclick="logout()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Logout</button>
+                        </div>
+                    </header>
+
+                    <div class="flex-1 flex overflow-hidden">
+                        <!-- Sidebar -->
+                        <nav class="w-64 bg-white border-r flex flex-col">
+                            <div class="flex-1 py-4">
+                                <a href="#" onclick="showSection('dashboard')" class="nav-link flex items-center gap-3 px-6 py-3 text-gray-700 hover:bg-gray-100">
+                                    <span class="text-xl">&#128202;</span>
+                                    <span>Dashboard</span>
+                                </a>
+                                <a href="#" onclick="showSection('leads')" class="nav-link flex items-center gap-3 px-6 py-3 text-gray-700 hover:bg-gray-100">
+                                    <span class="text-xl">&#128203;</span>
+                                    <span>Leads</span>
+                                </a>
+                                ${isSupervisor ? `
+                                <a href="#" onclick="showSection('campaigns')" class="nav-link flex items-center gap-3 px-6 py-3 text-gray-700 hover:bg-gray-100">
+                                    <span class="text-xl">&#128226;</span>
+                                    <span>Campaigns</span>
+                                </a>
+                                <a href="#" onclick="showSection('agents')" class="nav-link flex items-center gap-3 px-6 py-3 text-gray-700 hover:bg-gray-100">
+                                    <span class="text-xl">&#128101;</span>
+                                    <span>Agents</span>
+                                </a>
+                                ` : ''}
+                            </div>
+
+                            <!-- Phone Dialer -->
+                            <div class="p-4 border-t">
+                                <h3 class="text-sm font-medium text-gray-500 mb-2">Quick Dial</h3>
+                                <input type="tel" id="dial-number" placeholder="+1 (555) 000-0000" class="w-full px-3 py-2 border rounded-lg mb-2">
+                                <button onclick="makeCall()" class="w-full py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                    &#128222; Call
+                                </button>
+                            </div>
+                        </nav>
+
+                        <!-- Main Content -->
+                        <main id="main-content" class="flex-1 overflow-auto p-6">
+                            <!-- Content will be loaded here -->
+                        </main>
+                    </div>
+                </div>
+            `;
+
+            showSection('dashboard');
+        }
+
+        async function showSection(section) {
+            const content = document.getElementById('main-content');
+            content.innerHTML = '<div class="flex justify-center items-center h-full"><div class="loader"></div></div>';
+
+            try {
+                switch(section) {
+                    case 'dashboard':
+                        await renderDashboardContent(content);
+                        break;
+                    case 'leads':
+                        await renderLeadsContent(content);
+                        break;
+                    case 'campaigns':
+                        await renderCampaignsContent(content);
+                        break;
+                    case 'agents':
+                        await renderAgentsContent(content);
+                        break;
+                }
+            } catch (err) {
+                content.innerHTML = `<div class="text-red-600">Error loading content: ${err.message}</div>`;
+            }
+        }
+
+        async function renderDashboardContent(content) {
+            const [leads, agents, campaigns] = await Promise.all([
+                api('GET', '/api/leads'),
+                api('GET', '/api/agents'),
+                api('GET', '/api/campaigns')
+            ]);
+
+            content.innerHTML = `
+                <h2 class="text-2xl font-bold mb-6">Dashboard</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <h3 class="text-gray-500 text-sm font-medium">Total Leads</h3>
+                        <p class="text-3xl font-bold text-blue-600">${leads.length}</p>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <h3 class="text-gray-500 text-sm font-medium">Active Agents</h3>
+                        <p class="text-3xl font-bold text-green-600">${agents.filter(a => a.status === 'AVAILABLE').length}</p>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <h3 class="text-gray-500 text-sm font-medium">Active Campaigns</h3>
+                        <p class="text-3xl font-bold text-purple-600">${campaigns.filter(c => c.status === 'ACTIVE').length}</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg shadow">
+                    <div class="px-6 py-4 border-b">
+                        <h3 class="text-lg font-semibold">Recent Leads</h3>
+                    </div>
+                    <div class="p-6">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="text-left text-gray-500 text-sm">
+                                    <th class="pb-3">Name</th>
+                                    <th class="pb-3">Phone</th>
+                                    <th class="pb-3">Status</th>
+                                    <th class="pb-3">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${leads.slice(0, 5).map(lead => `
+                                    <tr class="border-t">
+                                        <td class="py-3">${lead.firstName || ''} ${lead.lastName || ''}</td>
+                                        <td class="py-3">${lead.phone || 'N/A'}</td>
+                                        <td class="py-3">
+                                            <span class="px-2 py-1 text-xs rounded-full ${getStatusColor(lead.status)}">${lead.status}</span>
+                                        </td>
+                                        <td class="py-3">
+                                            <button onclick="callLead(${lead.id}, '${lead.phone}')" class="text-green-600 hover:text-green-800">&#128222; Call</button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function renderLeadsContent(content) {
+            const leads = await api('GET', '/api/leads');
+
+            content.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold">Leads</h2>
+                    <button onclick="showAddLeadModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">+ Add Lead</button>
+                </div>
+
+                <div class="bg-white rounded-lg shadow">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="text-left text-gray-500 text-sm border-b">
+                                <th class="px-6 py-3">Name</th>
+                                <th class="px-6 py-3">Phone</th>
+                                <th class="px-6 py-3">Email</th>
+                                <th class="px-6 py-3">Company</th>
+                                <th class="px-6 py-3">Status</th>
+                                <th class="px-6 py-3">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${leads.map(lead => `
+                                <tr class="border-t hover:bg-gray-50">
+                                    <td class="px-6 py-4">${lead.firstName || ''} ${lead.lastName || ''}</td>
+                                    <td class="px-6 py-4">${lead.phone || 'N/A'}</td>
+                                    <td class="px-6 py-4">${lead.email || 'N/A'}</td>
+                                    <td class="px-6 py-4">${lead.company || 'N/A'}</td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 text-xs rounded-full ${getStatusColor(lead.status)}">${lead.status}</span>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <button onclick="callLead(${lead.id}, '${lead.phone}')" class="text-green-600 hover:text-green-800 mr-3">&#128222;</button>
+                                        <button onclick="editLead(${lead.id})" class="text-blue-600 hover:text-blue-800">Edit</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function renderCampaignsContent(content) {
+            const campaigns = await api('GET', '/api/campaigns');
+
+            content.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold">Campaigns</h2>
+                    <button onclick="showAddCampaignModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">+ New Campaign</button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    ${campaigns.map(campaign => `
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-start mb-4">
+                                <h3 class="font-semibold text-lg">${campaign.name}</h3>
+                                <span class="px-2 py-1 text-xs rounded-full ${getCampaignStatusColor(campaign.status)}">${campaign.status}</span>
+                            </div>
+                            <p class="text-gray-500 text-sm mb-4">${campaign.description || 'No description'}</p>
+                            <div class="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span class="text-gray-500">Total Leads</span>
+                                    <p class="font-semibold">${campaign.totalLeads}</p>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">Connected</span>
+                                    <p class="font-semibold">${campaign.connectedLeads}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function renderAgentsContent(content) {
+            const agents = await api('GET', '/api/agents');
+
+            content.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold">Agents</h2>
+                    <button onclick="showAddAgentModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">+ Add Agent</button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    ${agents.map(agent => `
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex items-center gap-4 mb-4">
+                                <div class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg">
+                                    ${agent.name.charAt(0)}
+                                </div>
+                                <div>
+                                    <h3 class="font-semibold">${agent.name}</h3>
+                                    <p class="text-sm text-gray-500">Ext: ${agent.extension}</p>
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="px-2 py-1 text-xs rounded-full ${getAgentStatusColor(agent.status)}">${agent.status}</span>
+                                <span class="text-sm text-gray-500">${agent.agentType}</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function getStatusColor(status) {
+            const colors = {
+                'NEW': 'bg-blue-100 text-blue-800',
+                'CONTACTED': 'bg-yellow-100 text-yellow-800',
+                'QUALIFIED': 'bg-green-100 text-green-800',
+                'CONVERTED': 'bg-purple-100 text-purple-800',
+                'LOST': 'bg-red-100 text-red-800'
+            };
+            return colors[status] || 'bg-gray-100 text-gray-800';
+        }
+
+        function getCampaignStatusColor(status) {
+            const colors = {
+                'DRAFT': 'bg-gray-100 text-gray-800',
+                'ACTIVE': 'bg-green-100 text-green-800',
+                'PAUSED': 'bg-yellow-100 text-yellow-800',
+                'COMPLETED': 'bg-blue-100 text-blue-800'
+            };
+            return colors[status] || 'bg-gray-100 text-gray-800';
+        }
+
+        function getAgentStatusColor(status) {
+            const colors = {
+                'AVAILABLE': 'bg-green-100 text-green-800',
+                'BUSY': 'bg-red-100 text-red-800',
+                'AWAY': 'bg-yellow-100 text-yellow-800',
+                'OFFLINE': 'bg-gray-100 text-gray-800'
+            };
+            return colors[status] || 'bg-gray-100 text-gray-800';
+        }
+
+        async function makeCall() {
+            const number = document.getElementById('dial-number').value;
+            if (!number) {
+                alert('Please enter a phone number');
+                return;
+            }
+
+            try {
+                const result = await api('POST', '/api/calls/dial', { phoneNumber: number });
+                alert(`Call initiated! Call ID: ${result.callId || 'N/A'}`);
+            } catch (err) {
+                alert(`Failed to make call: ${err.message}`);
+            }
+        }
+
+        async function callLead(leadId, phone) {
+            if (!phone) {
+                alert('This lead has no phone number');
+                return;
+            }
+
+            try {
+                const result = await api('POST', `/api/leads/${leadId}/call`);
+                alert(`Call initiated to ${phone}!`);
+            } catch (err) {
+                alert(`Failed to call lead: ${err.message}`);
+            }
+        }
+
+        function logout() {
+            authToken = null;
+            currentUser = null;
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('currentUser');
+            renderLogin();
+        }
+
+        // Initialize
+        function init() {
+            authToken = localStorage.getItem('authToken');
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) currentUser = JSON.parse(savedUser);
+
+            if (authToken && currentUser) {
+                renderDashboard();
+            } else {
+                renderLogin();
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

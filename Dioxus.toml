@@ -1,0 +1,28 @@
+[application]
+name = "voip-crm"
+default_platform = "web"
+
+[web.app]
+title = "VoIP CRM"
+
+[web.resource]
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "assets"]
+
+[web.resource.dev]
+style = ["assets/styles.css"]
+
+[web.resource.release]
+style = ["assets/styles.css"]
+
+[desktop]
+title = "VoIP CRM"
+width = 1200
+height = 800
+resizable = true
+
+[desktop.features]
+default = false
+features = ["desktop-audio"]

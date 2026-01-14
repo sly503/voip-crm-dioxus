@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{app_title}</title>
+    <!-- Telnyx WebRTC SDK -->
+    <script src="https://unpkg.com/@telnyx/webrtc@2/lib/bundle.js"></script>
+    {style_include}
+  </head>
+  <body>
+    <div id="main"></div>
+
+    <!-- Hidden audio element for call audio -->
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+      // Telnyx WebRTC Client
+      window.telnyxClient = null;
+      window.currentCall = null;
+
+      // Initialize Telnyx WebRTC
+      window.initTelnyxWebRTC = async function(username, password) {
+        return new Promise((resolve, reject) => {
+          try {
+            const client = new TelnyxRTC({
+              login: username,
+              password: password,
+            });
+
+            client.on('telnyx.ready', () => {
+              console.log('Telnyx WebRTC ready');
+              window.telnyxClient = client;
+              resolve(true);
+            });
+
+            client.on('telnyx.error', (error) => {
+              console.error('Telnyx error:', error);
+              reject(error);
+            });
+
+            client.on('telnyx.notification', (notification) => {
+              console.log('Telnyx notification:', notification);
+
+              if (notification.type === 'callUpdate') {
+                handleCallUpdate(notification.call);
+              }
+            });
+
+            client.connect();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      };
+
+      // Handle call state updates
+      function handleCallUpdate(call) {
+        console.log('Call state:', call.state);
+
+        // Update global call reference
+        window.currentCall = call;
+
+        // Dispatch custom event for Rust to listen to
+        window.dispatchEvent(new CustomEvent('telnyxCallUpdate', {
+          detail: {
+            state: call.state,
+            direction: call.direction,
+            callId: call.id
+          }
+        }));
+
+        // Handle remote audio stream
+        if (call.remoteStream) {
+          const audioElement = document.getElementById('remoteAudio');
+          audioElement.srcObject = call.remoteStream;
+        }
+
+        // Handle call ended
+        if (call.state === 'destroy' || call.state === 'hangup') {
+          window.currentCall = null;
+        }
+      }
+
+      // Make outbound call via WebRTC
+      window.makeWebRTCCall = function(destination, callerId) {
+        return new Promise((resolve, reject) => {
+          if (!window.telnyxClient) {
+            reject(new Error('Telnyx client not initialized'));
+            return;
+          }
+
+          try {
+            const call = window.telnyxClient.newCall({
+              destinationNumber: destination,
+              callerNumber: callerId,
+            });
+
+            window.currentCall = call;
+            resolve({ callId: call.id, state: call.state });
+          } catch (err) {
+            reject(err);
+          }
+        });
+      };
+
+      // Answer incoming call
+      window.answerWebRTCCall = function() {
+        if (window.currentCall && window.currentCall.state === 'ringing') {
+          window.currentCall.answer();
+          return true;
+        }
+        return false;
+      };
+
+      // Hang up current call
+      window.hangupWebRTCCall = function() {
+        if (window.currentCall) {
+          window.currentCall.hangup();
+          window.currentCall = null;
+          return true;
+        }
+        return false;
+      };
+
+      // Mute/unmute
+      window.toggleMuteWebRTC = function() {
+        if (window.currentCall) {
+          if (window.currentCall.localStream) {
+            const audioTrack = window.currentCall.localStream.getAudioTracks()[0];
+            if (audioTrack) {
+              audioTrack.enabled = !audioTrack.enabled;
+              return !audioTrack.enabled; // return true if muted
+            }
+          }
+        }
+        return false;
+      };
+
+      // Hold/unhold
+      window.toggleHoldWebRTC = function() {
+        if (window.currentCall) {
+          if (window.currentCall.state === 'active') {
+            window.currentCall.hold();
+            return true;
+          } else if (window.currentCall.state === 'held') {
+            window.currentCall.unhold();
+            return false;
+          }
+        }
+        return false;
+      };
+
+      // Send DTMF
+      window.sendDTMF = function(digit) {
+        if (window.currentCall) {
+          window.currentCall.dtmf(digit);
+          return true;
+        }
+        return false;
+      };
+
+      // Get call state
+      window.getWebRTCCallState = function() {
+        if (window.currentCall) {
+          return {
+            state: window.currentCall.state,
+            direction: window.currentCall.direction,
+            callId: window.currentCall.id
+          };
+        }
+        return null;
+      };
+
+      // Check if client is ready
+      window.isTelnyxReady = function() {
+        return window.telnyxClient !== null;
+      };
+
+      // Disconnect client
+      window.disconnectTelnyx = function() {
+        if (window.telnyxClient) {
+          window.telnyxClient.disconnect();
+          window.telnyxClient = null;
+        }
+      };
+    </script>
+  </body>
+</html>
