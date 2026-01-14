@@ -15,6 +15,7 @@ pub mod auth;
 pub mod claude;
 pub mod automation;
 pub mod ai_call_handler;
+pub mod email;
 
 use axum::{
     routing::{get, post, put},
@@ -40,6 +41,7 @@ pub struct AppState {
     pub claude: claude::ClaudeClient,
     pub automation: Arc<automation::AutomationManager>,
     pub ai_handler: Arc<ai_call_handler::AiCallHandler>,
+    pub email: email::EmailService,
     pub jwt_secret: String,
     pub caller_id: String,
     pub webhook_url: String,
@@ -1091,6 +1093,22 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
         telnyx.clone(),
     );
 
+    // Initialize email service
+    let email = email::EmailService::from_env()
+        .unwrap_or_else(|e| {
+            tracing::warn!("Email service not configured: {}. Email features will be disabled.", e);
+            // Return a dummy service that will fail gracefully
+            email::EmailService::new(
+                "localhost",
+                587,
+                "noreply",
+                "password",
+                "noreply@localhost",
+                "VoIP CRM",
+                "http://localhost:3000",
+            ).expect("Failed to create fallback email service")
+        });
+
     // Optionally initialize SIP User Agent for direct trunk calls
     let sip_agent = if let Some(sip_config) = sip::SipConfig::from_env() {
         tracing::info!("SIP trunk configured: {}:{}", sip_config.trunk_host, sip_config.trunk_port);
@@ -1115,6 +1133,7 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
         claude,
         automation: Arc::new(automation_manager),
         ai_handler: Arc::new(ai_handler),
+        email,
         jwt_secret,
         caller_id,
         webhook_url,
