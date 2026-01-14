@@ -73,6 +73,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/verify-email", post(auth::verify_email))
+        .route("/api/auth/resend-verification", post(auth::resend_verification))
 
         // Lead routes
         .route("/api/leads", get(get_leads).post(create_lead))

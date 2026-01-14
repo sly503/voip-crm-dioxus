@@ -49,6 +49,16 @@ pub struct VerifyEmailResponse {
     pub user: crate::models::UserInfo,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResendVerificationRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResendVerificationResponse {
+    pub message: String,
+}
+
 /// Hash a password using bcrypt
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
@@ -337,5 +347,82 @@ pub async fn verify_email(
         message: "Email verified successfully".to_string(),
         token,
         user: user.to_info(),
+    }))
+}
+
+/// Resend verification email handler
+pub async fn resend_verification(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ResendVerificationRequest>,
+) -> Result<Json<ResendVerificationResponse>, (StatusCode, Json<AuthError>)> {
+    // Find user by email
+    let user = db::users::get_by_email(&state.db, &req.email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(AuthError { message: "Email not found".to_string() }),
+            )
+        })?;
+
+    // Check if email is already verified
+    if user.email_verified {
+        return Ok(Json(ResendVerificationResponse {
+            message: "Email is already verified. You can now login.".to_string(),
+        }));
+    }
+
+    // Rate limiting: Check how many verification tokens were created in the last hour
+    let recent_token_count = db::users::count_recent_verification_tokens(&state.db, &req.email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?;
+
+    if recent_token_count >= 3 {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(AuthError {
+                message: "Too many verification emails sent. Please wait an hour before requesting another.".to_string()
+            }),
+        ));
+    }
+
+    // Generate new verification token
+    let verification_token = uuid::Uuid::new_v4().to_string();
+
+    // Store verification token in database
+    db::users::create_verification_token(&state.db, user.id, &user.email, &verification_token)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to create verification token".to_string() }),
+            )
+        })?;
+
+    // Send verification email
+    state.email
+        .send_verification_email(&user.email, Some(&user.username), &verification_token)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send verification email: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to send verification email".to_string() }),
+            )
+        })?;
+
+    Ok(Json(ResendVerificationResponse {
+        message: "Verification email sent. Please check your inbox.".to_string(),
     }))
 }

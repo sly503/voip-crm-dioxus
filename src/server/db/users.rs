@@ -148,3 +148,19 @@ pub async fn verify_email(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error
     .await?;
     Ok(())
 }
+
+/// Count verification tokens created in the last hour for an email
+/// Used for rate limiting resend verification requests
+pub async fn count_recent_verification_tokens(pool: &PgPool, email: &str) -> Result<i64, sqlx::Error> {
+    let result: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM verification_tokens
+        WHERE email = $1 AND created_at > NOW() - INTERVAL '1 hour'
+        "#
+    )
+    .bind(email)
+    .fetch_one(pool)
+    .await?;
+    Ok(result.0)
+}
