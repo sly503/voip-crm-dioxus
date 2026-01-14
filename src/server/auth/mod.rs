@@ -37,6 +37,18 @@ pub struct RegisterResponse {
     pub email: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyEmailResponse {
+    pub message: String,
+    pub token: String,
+    pub user: crate::models::UserInfo,
+}
+
 /// Hash a password using bcrypt
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
@@ -233,5 +245,89 @@ pub async fn register(
     Ok(Json(RegisterResponse {
         message: "Registration successful. Please check your email to verify your account.".to_string(),
         email: user.email,
+    }))
+}
+
+/// Verify email handler
+pub async fn verify_email(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<VerifyEmailRequest>,
+) -> Result<Json<VerifyEmailResponse>, (StatusCode, Json<AuthError>)> {
+    // Get verification token from database
+    let token_data = db::users::get_verification_token(&state.db, &req.token)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(AuthError { message: "Invalid verification token".to_string() }),
+            )
+        })?;
+
+    let (user_id, _email, is_valid) = token_data;
+
+    // Check if token is valid (not used and not expired)
+    if !is_valid {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthError { message: "Verification token has expired or already been used".to_string() }),
+        ));
+    }
+
+    // Mark email as verified
+    db::users::verify_email(&state.db, user_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to verify email".to_string() }),
+            )
+        })?;
+
+    // Mark token as used
+    db::users::mark_token_used(&state.db, &req.token)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to mark token as used".to_string() }),
+            )
+        })?;
+
+    // Get user details
+    let user = db::users::get_by_id(&state.db, user_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to retrieve user".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "User not found".to_string() }),
+            )
+        })?;
+
+    // Create JWT token for automatic login
+    let role_str = format!("{:?}", user.role);
+    let token = create_token(user.id, &user.username, &role_str, &state.jwt_secret)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Token generation error".to_string() }),
+            )
+        })?;
+
+    Ok(Json(VerifyEmailResponse {
+        message: "Email verified successfully".to_string(),
+        token,
+        user: user.to_info(),
     }))
 }
