@@ -3,23 +3,23 @@
   "spec": "001-user-registration-flow",
   "state": "building",
   "subtasks": {
-    "completed": 22,
+    "completed": 24,
     "total": 27,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Frontend - Invitation UI",
+    "current": "Testing and Validation",
     "id": null,
-    "total": 4
+    "total": 3
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 24,
+    "number": 26,
     "started_at": "2026-01-14T14:44:37.255924"
   },
-  "last_update": "2026-01-14T15:37:37.568792"
+  "last_update": "2026-01-14T15:43:23.037833"
 }
