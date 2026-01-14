@@ -31,6 +31,12 @@ pub struct AuthError {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RegisterResponse {
+    pub message: String,
+    pub email: String,
+}
+
 /// Hash a password using bcrypt
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
@@ -162,7 +168,15 @@ pub async fn login(
 pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterRequest>,
-) -> Result<Json<LoginResponse>, (StatusCode, Json<AuthError>)> {
+) -> Result<Json<RegisterResponse>, (StatusCode, Json<AuthError>)> {
+    // Check if email already exists
+    if let Ok(Some(_)) = db::users::get_by_email(&state.db, &req.email).await {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(AuthError { message: "Email already exists".to_string() }),
+        ));
+    }
+
     // Check if username already exists
     if let Ok(Some(_)) = db::users::get_by_username(&state.db, &req.username).await {
         return Err((
@@ -180,7 +194,7 @@ pub async fn register(
             )
         })?;
 
-    // Create user
+    // Create user (email_verified defaults to false)
     let role = req.role.unwrap_or(UserRole::Agent);
     let user = db::users::create(&state.db, &req.username, &req.email, &password_hash, role)
         .await
@@ -191,18 +205,33 @@ pub async fn register(
             )
         })?;
 
-    // Create JWT token
-    let role_str = format!("{:?}", user.role);
-    let token = create_token(user.id, &user.username, &role_str, &state.jwt_secret)
+    // Generate verification token
+    let verification_token = uuid::Uuid::new_v4().to_string();
+
+    // Store verification token in database
+    db::users::create_verification_token(&state.db, user.id, &user.email, &verification_token)
+        .await
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AuthError { message: "Token generation error".to_string() }),
+                Json(AuthError { message: "Failed to create verification token".to_string() }),
             )
         })?;
 
-    Ok(Json(LoginResponse {
-        token,
-        user: user.to_info(),
+    // Send verification email
+    state.email
+        .send_verification_email(&user.email, Some(&user.username), &verification_token)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send verification email: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to send verification email".to_string() }),
+            )
+        })?;
+
+    Ok(Json(RegisterResponse {
+        message: "Registration successful. Please check your email to verify your account.".to_string(),
+        email: user.email,
     }))
 }
