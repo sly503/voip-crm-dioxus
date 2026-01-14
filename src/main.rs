@@ -259,7 +259,7 @@ fn Sidebar(is_supervisor: bool) -> Element {
 }
 
 #[component]
-fn LoginPage() -> Element {
+pub fn LoginPage() -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut is_loading = use_signal(|| false);
@@ -349,13 +349,23 @@ fn LoginPage() -> Element {
                     p { "Demo credentials:" }
                     p { class: "font-mono", "admin / admin123" }
                 }
+
+                // Registration link
+                div { class: "mt-6 text-center text-sm",
+                    span { class: "text-gray-600", "Don't have an account? " }
+                    Link {
+                        to: Route::Register {},
+                        class: "text-blue-600 hover:text-blue-700 font-medium",
+                        "Create one"
+                    }
+                }
             }
         }
     }
 }
 
 #[component]
-fn RegistrationPage() -> Element {
+pub fn RegistrationPage() -> Element {
     let mut email = use_signal(String::new);
     let mut username = use_signal(String::new);
     let mut first_name = use_signal(String::new);
@@ -577,15 +587,11 @@ fn RegistrationPage() -> Element {
                 }
 
                 // Link to login page
-                div { class: "mt-6 text-center text-sm text-gray-600",
-                    "Already have an account? "
-                    a {
+                div { class: "mt-6 text-center text-sm",
+                    span { class: "text-gray-600", "Already have an account? " }
+                    Link {
+                        to: Route::Login {},
                         class: "text-blue-600 hover:text-blue-700 font-medium",
-                        href: "#",
-                        onclick: move |_| {
-                            // For now, just reload to show login (will be replaced with routing)
-                            // This placeholder will be updated when routing is added in subtask-6.2
-                        },
                         "Sign in"
                     }
                 }

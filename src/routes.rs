@@ -32,9 +32,12 @@ pub enum Route {
         Settings {},
     #[end_layout]
 
-    // Login is outside the layout (no sidebar/topbar)
+    // Login and Register are outside the layout (no sidebar/topbar)
     #[route("/login")]
     Login {},
+
+    #[route("/register")]
+    Register {},
 }
 
 // Route handler components
@@ -75,7 +78,14 @@ fn AgentDashboard() -> Element {
 #[component]
 fn Login() -> Element {
     rsx! {
-        div { "Login page - redirect handled in App" }
+        crate::LoginPage {}
+    }
+}
+
+#[component]
+fn Register() -> Element {
+    rsx! {
+        crate::RegistrationPage {}
     }
 }
 
