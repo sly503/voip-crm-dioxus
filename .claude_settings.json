@@ -1,0 +1,39 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/**)",
+      "Write(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/**)",
+      "Edit(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/**)",
+      "Glob(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/**)",
+      "Grep(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/**)",
+      "Read(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/.auto-claude/specs/001-user-registration-flow/**)",
+      "Write(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/.auto-claude/specs/001-user-registration-flow/**)",
+      "Edit(/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-user-registration-flow/.auto-claude/specs/001-user-registration-flow/**)",
+      "Read(/home/fatjon2026/voip-crm-dioxus/.auto-claude/**)",
+      "Write(/home/fatjon2026/voip-crm-dioxus/.auto-claude/**)",
+      "Edit(/home/fatjon2026/voip-crm-dioxus/.auto-claude/**)",
+      "Glob(/home/fatjon2026/voip-crm-dioxus/.auto-claude/**)",
+      "Grep(/home/fatjon2026/voip-crm-dioxus/.auto-claude/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

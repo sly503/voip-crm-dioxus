@@ -160,6 +160,14 @@ pub async fn login(
         ));
     }
 
+    // Check email verification status (admins bypass this check)
+    if !user.email_verified && user.role != UserRole::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(AuthError { message: "Please verify your email before logging in. Check your inbox for a verification link.".to_string() }),
+        ));
+    }
+
     // Create JWT token
     let role_str = format!("{:?}", user.role);
     let token = create_token(user.id, &user.username, &role_str, &state.jwt_secret)

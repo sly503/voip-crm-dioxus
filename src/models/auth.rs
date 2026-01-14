@@ -45,6 +45,7 @@ pub struct User {
     pub last_name: Option<String>,
     #[serde(skip_serializing)]
     pub password_hash: String,
+    pub email_verified: bool,
 }
 
 impl User {

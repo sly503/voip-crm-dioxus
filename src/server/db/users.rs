@@ -6,7 +6,7 @@ use crate::models::{User, UserRole};
 pub async fn get_by_id(pool: &PgPool, id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, email, role, first_name, last_name, password_hash
+        SELECT id, username, email, role, first_name, last_name, password_hash, email_verified
         FROM users
         WHERE id = $1
         "#
@@ -19,7 +19,7 @@ pub async fn get_by_id(pool: &PgPool, id: i64) -> Result<Option<User>, sqlx::Err
 pub async fn get_by_username(pool: &PgPool, username: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, email, role, first_name, last_name, password_hash
+        SELECT id, username, email, role, first_name, last_name, password_hash, email_verified
         FROM users
         WHERE username = $1
         "#
@@ -40,7 +40,7 @@ pub async fn create(
         r#"
         INSERT INTO users (username, email, password_hash, role)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, username, email, role, first_name, last_name, password_hash
+        RETURNING id, username, email, role, first_name, last_name, password_hash, email_verified
         "#
     )
     .bind(username)
@@ -63,7 +63,7 @@ pub async fn update_password(pool: &PgPool, id: i64, password_hash: &str) -> Res
 pub async fn get_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, email, role, first_name, last_name, password_hash
+        SELECT id, username, email, role, first_name, last_name, password_hash, email_verified
         FROM users
         WHERE email = $1
         "#
