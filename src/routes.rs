@@ -38,6 +38,9 @@ pub enum Route {
 
     #[route("/register")]
     Register {},
+
+    #[route("/verify-email?:token")]
+    VerifyEmail { token: String },
 }
 
 // Route handler components
@@ -86,6 +89,13 @@ fn Login() -> Element {
 fn Register() -> Element {
     rsx! {
         crate::RegistrationPage {}
+    }
+}
+
+#[component]
+fn VerifyEmail(token: String) -> Element {
+    rsx! {
+        crate::VerifyEmailPage { token }
     }
 }
 

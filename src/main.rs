@@ -599,3 +599,147 @@ pub fn RegistrationPage() -> Element {
         }
     }
 }
+
+#[component]
+pub fn VerifyEmailPage(token: String) -> Element {
+    let mut status = use_signal(|| "verifying".to_string()); // verifying, success, error
+    let mut message = use_signal(|| "Verifying your email address...".to_string());
+    let mut email = use_signal(String::new);
+    let mut resend_loading = use_signal(|| false);
+    let mut resend_message = use_signal(|| None::<String>);
+
+    // Verify email on mount
+    use_effect(move || {
+        let token_clone = token.clone();
+        spawn(async move {
+            match api::auth::verify_email(&token_clone).await {
+                Ok(response) => {
+                    // Auto-login happens in the API call (token is stored)
+                    state::set_auth(response.user.clone(), response.token);
+                    status.set("success".to_string());
+                    message.set("Email verified successfully! Redirecting to dashboard...".to_string());
+
+                    // Auto-redirect after 2 seconds
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        use gloo_timers::future::TimeoutFuture;
+                        TimeoutFuture::new(2000).await;
+                        // Navigation will happen automatically when AUTH_STATE updates
+                    }
+                }
+                Err(e) => {
+                    status.set("error".to_string());
+                    message.set(format!("Verification failed: {}", e));
+                }
+            }
+        });
+    });
+
+    let resend_verification = move |_| {
+        let email_val = email();
+
+        if email_val.is_empty() {
+            resend_message.set(Some("Please enter your email address".to_string()));
+            return;
+        }
+
+        resend_loading.set(true);
+        resend_message.set(None);
+
+        spawn(async move {
+            match api::auth::resend_verification(&email_val).await {
+                Ok(response) => {
+                    resend_message.set(Some(response.message));
+                    email.set(String::new());
+                }
+                Err(e) => {
+                    resend_message.set(Some(format!("Failed to resend: {}", e)));
+                }
+            }
+            resend_loading.set(false);
+        });
+    };
+
+    rsx! {
+        div { class: "min-h-screen flex items-center justify-center bg-gray-100",
+            div { class: "bg-white rounded-lg shadow-lg p-8 w-full max-w-md",
+                // Logo
+                div { class: "text-center mb-8",
+                    span { class: "text-5xl", "\u{1F4DE}" }
+                    h1 { class: "text-2xl font-bold mt-4", "Email Verification" }
+                }
+
+                // Status message
+                if status() == "verifying" {
+                    div { class: "text-center py-8",
+                        div { class: "animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" }
+                        p { class: "text-gray-600", "{message()}" }
+                    }
+                } else if status() == "success" {
+                    div { class: "bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4",
+                        p { class: "font-medium", "✓ {message()}" }
+                    }
+                } else if status() == "error" {
+                    div {
+                        div { class: "bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6",
+                            p { class: "font-medium", "✗ {message()}" }
+                            p { class: "text-sm mt-2", "The verification link may have expired or is invalid." }
+                        }
+
+                        // Resend verification form
+                        div { class: "border-t pt-6",
+                            h2 { class: "text-lg font-semibold mb-4", "Resend Verification Email" }
+
+                            if let Some(msg) = resend_message.read().as_ref() {
+                                div {
+                                    class: if msg.contains("success") || msg.contains("sent") {
+                                        "bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4"
+                                    } else {
+                                        "bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4"
+                                    },
+                                    "{msg}"
+                                }
+                            }
+
+                            form {
+                                onsubmit: move |e| {
+                                    e.prevent_default();
+                                    resend_verification(());
+                                },
+                                div { class: "mb-4",
+                                    label { class: "block text-gray-700 mb-2", "Email Address" }
+                                    input {
+                                        r#type: "email",
+                                        class: "w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                        placeholder: "your@email.com",
+                                        value: "{email()}",
+                                        oninput: move |e| email.set(e.value().clone()),
+                                        disabled: resend_loading(),
+                                    }
+                                }
+
+                                button {
+                                    r#type: "submit",
+                                    class: "w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors",
+                                    disabled: resend_loading(),
+                                    if resend_loading() {
+                                        "Sending..."
+                                    } else {
+                                        "Resend Verification Email"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Link to login
+                div { class: "text-center mt-6 pt-6 border-t",
+                    p { class: "text-gray-600",
+                        Link { to: Route::Login {}, class: "text-blue-600 hover:underline", "Back to Login" }
+                    }
+                }
+            }
+        }
+    }
+}
