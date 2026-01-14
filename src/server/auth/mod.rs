@@ -73,6 +73,20 @@ pub struct InviteUserResponse {
     pub token: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RegisterInvitationRequest {
+    pub token: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterInvitationResponse {
+    pub message: String,
+    pub token: String,
+    pub user: crate::models::UserInfo,
+}
+
 /// Hash a password using bcrypt
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
@@ -519,5 +533,100 @@ pub async fn invite_user(
         email: req.email,
         role: req.role,
         token: invitation_token,
+    }))
+}
+
+/// Register with invitation handler - allows users to register using an invitation token
+pub async fn register_invitation(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterInvitationRequest>,
+) -> Result<Json<RegisterInvitationResponse>, (StatusCode, Json<AuthError>)> {
+    // Get invitation by token
+    let invitation = db::invitations::get_invitation_by_token(&state.db, &req.token)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Database error".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(AuthError { message: "Invalid invitation token".to_string() }),
+            )
+        })?;
+
+    let (email, role, _invited_by, is_valid) = invitation;
+
+    // Check if invitation is valid (not used and not expired)
+    if !is_valid {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthError { message: "Invitation has expired or already been used".to_string() }),
+        ));
+    }
+
+    // Check if username already exists
+    if let Ok(Some(_)) = db::users::get_by_username(&state.db, &req.username).await {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(AuthError { message: "Username already exists".to_string() }),
+        ));
+    }
+
+    // Hash password
+    let password_hash = hash_password(&req.password)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Password hashing error".to_string() }),
+            )
+        })?;
+
+    // Create user with invited role
+    let user = db::users::create(&state.db, &req.username, &email, &password_hash, role.clone())
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to create user".to_string() }),
+            )
+        })?;
+
+    // Mark email as verified (skip email verification for invited users)
+    db::users::verify_email(&state.db, user.id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to verify email".to_string() }),
+            )
+        })?;
+
+    // Mark invitation as used
+    db::invitations::mark_invitation_used(&state.db, &req.token, user.id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to mark invitation as used".to_string() }),
+            )
+        })?;
+
+    // Create JWT token for automatic login
+    let role_str = format!("{:?}", role);
+    let token = create_token(user.id, &user.username, &role_str, &state.jwt_secret)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Token generation error".to_string() }),
+            )
+        })?;
+
+    Ok(Json(RegisterInvitationResponse {
+        message: "Registration successful".to_string(),
+        token,
+        user: user.to_info(),
     }))
 }

@@ -3,7 +3,7 @@
   "spec": "001-user-registration-flow",
   "state": "building",
   "subtasks": {
-    "completed": 10,
+    "completed": 12,
     "total": 27,
     "in_progress": 1,
     "failed": 0
@@ -18,8 +18,8 @@
     "max": 1
   },
   "session": {
-    "number": 12,
+    "number": 14,
     "started_at": "2026-01-14T14:44:37.255924"
   },
-  "last_update": "2026-01-14T15:12:53.296675"
+  "last_update": "2026-01-14T15:17:10.219679"
 }
