@@ -20,6 +20,62 @@ pub struct RegisterRequest {
     pub role: Option<UserRole>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    pub message: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyEmailResponse {
+    pub message: String,
+    pub token: String,
+    pub user: UserInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResendVerificationRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResendVerificationResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteUserRequest {
+    pub email: String,
+    pub role: UserRole,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteUserResponse {
+    pub message: String,
+    pub email: String,
+    pub role: UserRole,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptInvitationRequest {
+    pub token: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptInvitationResponse {
+    pub message: String,
+    pub token: String,
+    pub user: UserInfo,
+}
+
 /// User info returned to client (no password)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
