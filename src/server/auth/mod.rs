@@ -516,9 +516,30 @@ pub async fn invite_user(
         )
     })?;
 
-    // Send invitation email
+    // Get inviter username for email
+    let inviter = db::users::get_by_id(&state.db, claims.sub)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to get inviter details".to_string() }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Inviter not found".to_string() }),
+            )
+        })?;
+
+    // Send invitation email with all required parameters
     state.email
-        .send_invitation_email(&req.email, &invitation_token, &req.role)
+        .send_invitation_email(
+            &req.email,
+            &inviter.username,
+            &format!("{:?}", req.role),
+            &invitation_token
+        )
         .await
         .map_err(|e| {
             tracing::error!("Failed to send invitation email: {}", e);
@@ -573,7 +594,7 @@ pub async fn get_invitation_details(
     let (email, role, invited_by_id, is_valid) = invitation;
 
     // Get inviter's username
-    let inviter = db::users::get(&state.db, invited_by_id)
+    let inviter = db::users::get_by_id(&state.db, invited_by_id)
         .await
         .map_err(|_| {
             (
