@@ -59,6 +59,20 @@ pub struct ResendVerificationResponse {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct InviteUserRequest {
+    pub email: String,
+    pub role: UserRole,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InviteUserResponse {
+    pub message: String,
+    pub email: String,
+    pub role: UserRole,
+    pub token: String,
+}
+
 /// Hash a password using bcrypt
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
@@ -424,5 +438,86 @@ pub async fn resend_verification(
 
     Ok(Json(ResendVerificationResponse {
         message: "Verification email sent. Please check your inbox.".to_string(),
+    }))
+}
+
+/// Invite user handler - allows supervisors and admins to invite new users
+pub async fn invite_user(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<InviteUserRequest>,
+) -> Result<Json<InviteUserResponse>, (StatusCode, Json<AuthError>)> {
+    // Authorization: Only supervisors and admins can send invitations
+    let claims_role = match claims.role.as_str() {
+        "Admin" => UserRole::Admin,
+        "Supervisor" => UserRole::Supervisor,
+        "Agent" => UserRole::Agent,
+        _ => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(AuthError { message: "Invalid role in token".to_string() }),
+            ));
+        }
+    };
+
+    if !claims_role.is_supervisor_or_above() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(AuthError { message: "Only supervisors and admins can send invitations".to_string() }),
+        ));
+    }
+
+    // Validate invited role: Cannot invite admins
+    if matches!(req.role, UserRole::Admin) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthError { message: "Cannot invite admin users. Only Agent and Supervisor roles are allowed.".to_string() }),
+        ));
+    }
+
+    // Check if email already exists
+    if let Ok(Some(_)) = db::users::get_by_email(&state.db, &req.email).await {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(AuthError { message: "Email already registered".to_string() }),
+        ));
+    }
+
+    // Generate invitation token
+    let invitation_token = uuid::Uuid::new_v4().to_string();
+
+    // Store invitation in database
+    db::invitations::create_invitation(
+        &state.db,
+        &invitation_token,
+        &req.email,
+        req.role.clone(),
+        claims.sub,
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AuthError { message: "Failed to create invitation".to_string() }),
+        )
+    })?;
+
+    // Send invitation email
+    state.email
+        .send_invitation_email(&req.email, &invitation_token, &req.role)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send invitation email: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AuthError { message: "Failed to send invitation email".to_string() }),
+            )
+        })?;
+
+    Ok(Json(InviteUserResponse {
+        message: "Invitation sent successfully".to_string(),
+        email: req.email,
+        role: req.role,
+        token: invitation_token,
     }))
 }
