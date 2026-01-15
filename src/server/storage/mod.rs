@@ -10,6 +10,9 @@
 
 pub mod encryption;
 
+#[cfg(test)]
+mod tests;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
