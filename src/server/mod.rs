@@ -892,6 +892,7 @@ async fn get_agent_stats(
 
 async fn get_all_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<AiAgentSettings>>, StatusCode> {
     db::ai::get_all_settings(&state.db)
         .await
@@ -901,6 +902,7 @@ async fn get_all_ai_settings(
 
 async fn get_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
 ) -> Result<Json<Option<AiAgentSettings>>, StatusCode> {
     db::ai::get_settings(&state.db, agent_id)
@@ -911,6 +913,7 @@ async fn get_ai_settings(
 
 async fn upsert_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
     Json(req): Json<UpsertAiSettingsRequest>,
 ) -> Result<Json<AiAgentSettings>, StatusCode> {
@@ -931,6 +934,7 @@ async fn upsert_ai_settings(
 
 async fn delete_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     db::ai::delete_settings(&state.db, agent_id)
@@ -941,6 +945,7 @@ async fn delete_ai_settings(
 
 async fn get_global_ai_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<GlobalAiConfig>, StatusCode> {
     db::ai::get_global_config(&state.db)
         .await
@@ -953,6 +958,7 @@ async fn get_global_ai_config(
 
 async fn update_global_ai_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(config): Json<GlobalAiConfig>,
 ) -> Result<Json<GlobalAiConfig>, StatusCode> {
     db::ai::update_global_config(&state.db, &config)
@@ -966,6 +972,7 @@ async fn update_global_ai_config(
 
 async fn get_prompt_templates(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<PromptTemplate>>, StatusCode> {
     db::ai::get_all_templates(&state.db)
         .await
@@ -978,6 +985,7 @@ async fn get_prompt_templates(
 
 async fn create_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(template): Json<PromptTemplate>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
     db::ai::create_template(&state.db, &template)
@@ -991,6 +999,7 @@ async fn create_prompt_template(
 
 async fn get_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
     db::ai::get_template(&state.db, &id)
@@ -1005,6 +1014,7 @@ async fn get_prompt_template(
 
 async fn update_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(template): Json<PromptTemplate>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
@@ -1019,6 +1029,7 @@ async fn update_prompt_template(
 
 async fn delete_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     db::ai::delete_template(&state.db, &id)
