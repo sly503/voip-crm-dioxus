@@ -20,7 +20,7 @@ pub mod storage;
 pub mod recordings_api;
 
 use axum::{
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
     extract::State,
     http::StatusCode,
@@ -136,6 +136,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/campaigns/{id}/automation/start", post(start_campaign_automation))
         .route("/api/campaigns/{id}/automation/stop", post(stop_campaign_automation))
         .route("/api/campaigns/{id}/automation/status", get(get_automation_status))
+
+        // Recording routes
+        .route("/api/recordings", get(recordings_api::search_recordings).post(recordings_api::upload_recording))
+        .route("/api/recordings/{id}", get(recordings_api::get_recording_details).delete(recordings_api::delete_recording_handler))
+        .route("/api/recordings/{id}/compliance-hold", put(recordings_api::update_compliance_hold))
+        .route("/api/recordings/{id}/download", get(recordings_api::download_recording))
+        .route("/api/recordings/{id}/stream", get(recordings_api::stream_recording))
 
         .layer(cors)
         .layer(TraceLayer::new_for_http())
