@@ -5,6 +5,7 @@
 //! - Lead selection and pacing
 //! - Retry logic with configurable delays
 //! - Time window enforcement
+//! - Retention policy enforcement for call recordings
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,6 +17,8 @@ use sqlx::PgPool;
 use crate::models::{Campaign, CampaignStatus, Lead, AgentStatus};
 use super::db;
 use super::telnyx::TelnyxClient;
+use super::storage::RecordingStorage;
+use super::email::EmailService;
 
 /// Campaign automation state
 #[derive(Debug, Clone)]
@@ -140,6 +143,292 @@ impl AutomationManager {
         let mut campaigns = self.campaigns.write().await;
         for state in campaigns.values_mut() {
             state.is_running = false;
+        }
+    }
+
+    /// Start the retention policy scheduler
+    /// This runs a daily background task to delete expired recordings
+    pub async fn start_retention_scheduler<S: RecordingStorage + Send + Sync + 'static>(
+        &self,
+        storage: Arc<S>,
+    ) {
+        let db = self.db.clone();
+        let shutdown = self.shutdown.clone();
+
+        tokio::spawn(async move {
+            Self::run_retention_cleanup_loop(db, storage, shutdown).await;
+        });
+
+        tracing::info!("Started retention policy scheduler");
+    }
+
+    /// Start the storage monitoring scheduler
+    /// This runs a background task to monitor storage usage and send alerts
+    pub async fn start_storage_monitoring<S: RecordingStorage + Send + Sync + 'static>(
+        &self,
+        storage: Arc<S>,
+        email_service: Arc<EmailService>,
+    ) {
+        let db = self.db.clone();
+        let shutdown = self.shutdown.clone();
+
+        tokio::spawn(async move {
+            Self::run_storage_monitoring_loop(db, storage, email_service, shutdown).await;
+        });
+
+        tracing::info!("Started storage monitoring scheduler");
+    }
+
+    /// Retention cleanup background task
+    /// Runs daily to delete recordings past their retention_until date
+    async fn run_retention_cleanup_loop<S: RecordingStorage + Send + Sync>(
+        db: PgPool,
+        storage: Arc<S>,
+        shutdown: Arc<RwLock<bool>>,
+    ) {
+        // Run daily at 2 AM (local time)
+        let mut interval = interval(Duration::from_secs(3600)); // Check every hour
+
+        loop {
+            interval.tick().await;
+
+            // Check if shutdown requested
+            if *shutdown.read().await {
+                tracing::info!("Retention scheduler shutting down");
+                break;
+            }
+
+            // Check if it's the right time to run (2 AM local time)
+            let now = Local::now();
+            if now.hour() != 2 || now.minute() >= 30 {
+                continue; // Only run between 2:00 AM and 2:30 AM
+            }
+
+            tracing::info!("Starting retention policy cleanup...");
+
+            match Self::cleanup_expired_recordings(&db, &storage).await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("Deleted {} expired recordings", count);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Retention cleanup failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Clean up expired recordings
+    /// Returns the number of recordings deleted
+    async fn cleanup_expired_recordings<S: RecordingStorage>(
+        db: &PgPool,
+        storage: &Arc<S>,
+    ) -> Result<usize, AutomationError> {
+        // Query for expired recordings (past retention_until and not on compliance hold)
+        let expired_recordings = sqlx::query!(
+            r#"
+            SELECT id, file_path
+            FROM call_recordings
+            WHERE retention_until < NOW()
+              AND compliance_hold = false
+            ORDER BY retention_until ASC
+            LIMIT 1000
+            "#
+        )
+        .fetch_all(db)
+        .await
+        .map_err(|e| AutomationError::DatabaseError(e.to_string()))?;
+
+        let mut deleted_count = 0;
+
+        for recording in expired_recordings {
+            let recording_id = recording.id;
+            let file_path = recording.file_path;
+
+            // Delete from storage first
+            match storage.delete_recording(&file_path).await {
+                Ok(_) => {
+                    // Delete from database
+                    match db::recordings::delete_recording(db, recording_id).await {
+                        Ok(_) => {
+                            // Track deletion
+                            if let Err(e) = db::recordings::increment_recordings_deleted(db).await {
+                                tracing::warn!("Failed to track recording deletion: {}", e);
+                            }
+                            deleted_count += 1;
+                            tracing::debug!("Deleted expired recording {}: {}", recording_id, file_path);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to delete recording {} from database: {}", recording_id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to delete recording file {}: {}", file_path, e);
+                    // Continue with next recording even if one fails
+                }
+            }
+        }
+
+        Ok(deleted_count)
+    }
+
+    /// Storage monitoring background task
+    /// Runs hourly to check storage usage and send alerts when threshold exceeded
+    async fn run_storage_monitoring_loop<S: RecordingStorage + Send + Sync>(
+        db: PgPool,
+        storage: Arc<S>,
+        email_service: Arc<EmailService>,
+        shutdown: Arc<RwLock<bool>>,
+    ) {
+        // Check every hour
+        let mut interval = interval(Duration::from_secs(3600));
+
+        // Track state for alert throttling
+        let mut last_alert_sent = Arc::new(RwLock::new(None::<chrono::DateTime<chrono::Utc>>));
+        let mut last_report_sent = Arc::new(RwLock::new(None::<chrono::NaiveDate>));
+
+        // Get alert threshold from environment (default 80%)
+        let alert_threshold = std::env::var("STORAGE_ALERT_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(80.0);
+
+        loop {
+            interval.tick().await;
+
+            // Check if shutdown requested
+            if *shutdown.read().await {
+                tracing::info!("Storage monitoring scheduler shutting down");
+                break;
+            }
+
+            // Get current storage stats
+            let stats = match storage.get_storage_stats(&db).await {
+                Ok(stats) => stats,
+                Err(e) => {
+                    tracing::error!("Failed to get storage stats: {}", e);
+                    continue;
+                }
+            };
+
+            let now = chrono::Utc::now();
+            let today = now.date_naive();
+
+            // Check if we should send a storage warning alert
+            if stats.quota_percentage >= alert_threshold {
+                let should_send_alert = {
+                    let last_sent = last_alert_sent.read().await;
+                    match *last_sent {
+                        None => true,
+                        Some(last) => {
+                            // Only send alert once per day
+                            now.signed_duration_since(last).num_hours() >= 24
+                        }
+                    }
+                };
+
+                if should_send_alert {
+                    tracing::warn!(
+                        "Storage usage at {:.1}% (threshold: {:.1}%) - sending alerts",
+                        stats.quota_percentage,
+                        alert_threshold
+                    );
+
+                    // Get admin users
+                    match db::users::get_admins(&db).await {
+                        Ok(admins) => {
+                            for admin in admins {
+                                let name = admin.first_name
+                                    .as_ref()
+                                    .map(|f| f.as_str())
+                                    .or(Some(admin.username.as_str()));
+
+                                if let Err(e) = email_service
+                                    .send_storage_alert(
+                                        &admin.email,
+                                        name,
+                                        stats.total_size_gb,
+                                        stats.quota_gb,
+                                        stats.quota_percentage,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!("Failed to send storage alert to {}: {}", admin.email, e);
+                                } else {
+                                    tracing::info!("Sent storage alert to {}", admin.email);
+                                }
+                            }
+
+                            *last_alert_sent.write().await = Some(now);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get admin users for storage alerts: {}", e);
+                        }
+                    }
+                }
+            }
+
+            // Check if we should send daily report (at 8 AM local time)
+            let local_now = Local::now();
+            if local_now.hour() == 8 && local_now.minute() < 30 {
+                let should_send_report = {
+                    let last_sent = last_report_sent.read().await;
+                    match *last_sent {
+                        None => true,
+                        Some(last) => last != today,
+                    }
+                };
+
+                if should_send_report {
+                    tracing::info!("Sending daily storage report");
+
+                    // Get today's statistics
+                    let today_stats = match db::recordings::get_today_stats(&db).await {
+                        Ok(stats) => stats,
+                        Err(e) => {
+                            tracing::error!("Failed to get today's stats: {}", e);
+                            (0, 0) // Default to 0 if query fails
+                        }
+                    };
+
+                    // Get admin users
+                    match db::users::get_admins(&db).await {
+                        Ok(admins) => {
+                            for admin in admins {
+                                let name = admin.first_name
+                                    .as_ref()
+                                    .map(|f| f.as_str())
+                                    .or(Some(admin.username.as_str()));
+
+                                if let Err(e) = email_service
+                                    .send_daily_storage_report(
+                                        &admin.email,
+                                        name,
+                                        stats.total_files,
+                                        stats.total_size_gb,
+                                        stats.quota_gb,
+                                        stats.quota_percentage,
+                                        today_stats.0,
+                                        today_stats.1,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!("Failed to send daily report to {}: {}", admin.email, e);
+                                } else {
+                                    tracing::info!("Sent daily storage report to {}", admin.email);
+                                }
+                            }
+
+                            *last_report_sent.write().await = Some(today);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get admin users for daily report: {}", e);
+                        }
+                    }
+                }
+            }
         }
     }
 

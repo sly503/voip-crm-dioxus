@@ -16,9 +16,14 @@ pub mod claude;
 pub mod automation;
 pub mod ai_call_handler;
 pub mod email;
+pub mod storage;
+pub mod recordings_api;
+
+#[cfg(test)]
+mod retention_policy_tests;
 
 use axum::{
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
     extract::State,
     http::StatusCode,
@@ -49,6 +54,8 @@ pub struct AppState {
     pub sip_password: String,
     /// Optional SIP User Agent for direct SIP trunk calls
     pub sip_agent: Option<Arc<tokio::sync::RwLock<sip::SipUserAgent>>>,
+    /// Optional storage system for call recordings
+    pub storage: Option<Arc<dyn storage::RecordingStorage + Send + Sync>>,
 }
 
 /// Create the Axum router with all API routes
@@ -85,6 +92,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/leads/{id}/notes", post(add_lead_note))
         .route("/api/leads/{id}/status", put(update_lead_status))
         .route("/api/leads/{id}/assign", put(assign_lead))
+        .route("/api/leads/{id}/calls", get(get_lead_calls))
 
         // Agent routes
         .route("/api/agents", get(get_agents).post(create_agent))
@@ -134,6 +142,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/campaigns/{id}/automation/start", post(start_campaign_automation))
         .route("/api/campaigns/{id}/automation/stop", post(stop_campaign_automation))
         .route("/api/campaigns/{id}/automation/status", get(get_automation_status))
+
+        // Recording routes
+        .route("/api/recordings", get(recordings_api::search_recordings).post(recordings_api::upload_recording))
+        .route("/api/recordings/{id}", get(recordings_api::get_recording_details).delete(recordings_api::delete_recording_handler))
+        .route("/api/recordings/{id}/compliance-hold", put(recordings_api::update_compliance_hold))
+        .route("/api/recordings/{id}/download", get(recordings_api::download_recording))
+        .route("/api/recordings/{id}/stream", get(recordings_api::stream_recording))
+        .route("/api/recordings/storage/stats", get(recordings_api::get_storage_stats))
+
+        // Retention policy routes
+        .route("/api/retention-policies", get(recordings_api::get_retention_policies).post(recordings_api::create_retention_policy))
+        .route("/api/retention-policies/{id}", get(recordings_api::get_retention_policy).put(recordings_api::update_retention_policy).delete(recordings_api::delete_retention_policy_handler))
 
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -434,6 +454,17 @@ async fn assign_lead(
     Json(req): Json<AssignLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::assign(&state.db, id, req.agent_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn get_lead_calls(
+    State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<Vec<Call>>, StatusCode> {
+    db::calls::get_by_lead(&state.db, id)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -1161,6 +1192,30 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
             ).expect("Failed to create fallback email service")
         });
 
+    // Initialize storage system for call recordings
+    let storage = match storage::StorageConfig::from_env() {
+        Ok(config) => {
+            match config.initialize() {
+                Ok(storage) => {
+                    tracing::info!(
+                        "Storage initialized: path={}, quota={}GB",
+                        config.recordings_path,
+                        config.max_storage_gb
+                    );
+                    Some(Arc::new(storage) as Arc<dyn storage::RecordingStorage + Send + Sync>)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize storage: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Storage not configured: {}. Recording features will be disabled.", e);
+            None
+        }
+    };
+
     // Optionally initialize SIP User Agent for direct trunk calls
     let sip_agent = if let Some(sip_config) = sip::SipConfig::from_env() {
         tracing::info!("SIP trunk configured: {}:{}", sip_config.trunk_host, sip_config.trunk_port);
@@ -1192,7 +1247,31 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
         sip_username,
         sip_password,
         sip_agent,
+        storage,
     };
+
+    // Start retention policy scheduler if storage is configured
+    if let Some(ref storage) = state.storage {
+        let automation_clone = Arc::clone(&state.automation);
+        let storage_clone = Arc::clone(storage);
+        tokio::spawn(async move {
+            automation_clone.start_retention_scheduler(storage_clone).await;
+        });
+
+        tracing::info!("Retention policy scheduler started");
+    }
+
+    // Start storage monitoring if storage is configured
+    if let Some(ref storage) = state.storage {
+        let automation_clone = Arc::clone(&state.automation);
+        let storage_clone = Arc::clone(storage);
+        let email_clone = Arc::new(state.email.clone());
+        tokio::spawn(async move {
+            automation_clone.start_storage_monitoring(storage_clone, email_clone).await;
+        });
+
+        tracing::info!("Storage monitoring started");
+    }
 
     let app = create_router(state);
 

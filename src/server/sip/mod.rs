@@ -10,6 +10,8 @@
 mod config;
 mod codec;
 mod rtp;
+mod audio_mixer;
+mod audio_converter;
 mod user_agent;
 mod call;
 
@@ -23,6 +25,10 @@ pub use call::{SipCall, CallState, CallDirection};
 pub use codec::G711Codec;
 #[allow(unused_imports)]
 pub use rtp::RtpSession;
+#[allow(unused_imports)]
+pub use audio_mixer::{AudioMixer, MixMode};
+#[allow(unused_imports)]
+pub use audio_converter::AudioConverter;
 
 use thiserror::Error;
 
@@ -62,3 +68,7 @@ pub enum SipError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+// Integration tests for RTP recording and audio mixing
+#[cfg(test)]
+mod recording_integration_tests;

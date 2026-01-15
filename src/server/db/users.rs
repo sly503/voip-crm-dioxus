@@ -83,6 +83,19 @@ pub async fn check_email_verified(pool: &PgPool, user_id: i64) -> Result<bool, s
     Ok(result.0)
 }
 
+/// Get all users with Admin role
+pub async fn get_admins(pool: &PgPool) -> Result<Vec<User>, sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, username, email, role, first_name, last_name, password_hash, email_verified
+        FROM users
+        WHERE role = 'Admin' AND email_verified = true
+        "#
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn create_verification_token(
     pool: &PgPool,
     user_id: i64,

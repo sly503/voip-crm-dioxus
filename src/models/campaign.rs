@@ -26,6 +26,10 @@ pub struct Campaign {
     pub dialed_leads: Option<i32>,
     #[serde(rename = "connectedLeads")]
     pub connected_leads: Option<i32>,
+    #[serde(rename = "consentAnnouncement")]
+    pub consent_announcement: Option<String>,
+    #[serde(rename = "recordingEnabled")]
+    pub recording_enabled: bool,
     #[serde(rename = "createdAt")]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(rename = "updatedAt")]
@@ -99,6 +103,10 @@ pub struct CreateCampaignRequest {
     pub max_attempts: Option<i32>,
     #[serde(rename = "retryDelayMinutes")]
     pub retry_delay_minutes: Option<i32>,
+    #[serde(rename = "consentAnnouncement")]
+    pub consent_announcement: Option<String>,
+    #[serde(rename = "recordingEnabled")]
+    pub recording_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
