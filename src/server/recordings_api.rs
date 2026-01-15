@@ -12,20 +12,73 @@ use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
 use crate::models::recording::{CallRecording, CreateRecordingRequest, RecordingSearchParams, UpdateComplianceHoldRequest, RecordingRetentionPolicy, CreateRetentionPolicyRequest};
+use crate::models::UserRole;
 use crate::server::{AppState, auth::Claims};
 use crate::server::storage::{RecordingStorage, StorageError};
+
+// ============== Permission Helpers ==============
+
+/// Parse user role from Claims
+fn parse_role(claims: &Claims) -> Result<UserRole, StatusCode> {
+    match claims.role.as_str() {
+        "Admin" => Ok(UserRole::Admin),
+        "Supervisor" => Ok(UserRole::Supervisor),
+        "Agent" => Ok(UserRole::Agent),
+        _ => {
+            tracing::error!("Invalid role in token: {}", claims.role);
+            Err(StatusCode::FORBIDDEN)
+        }
+    }
+}
+
+/// Check if user has supervisor or admin role
+fn is_supervisor_or_admin(role: &UserRole) -> bool {
+    role.is_supervisor_or_above()
+}
+
+/// Check if a user can access a recording
+/// - Agents can only access their own recordings
+/// - Supervisors and Admins can access all recordings
+async fn can_access_recording(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    role: &UserRole,
+    recording: &CallRecording,
+) -> Result<bool, sqlx::Error> {
+    // Supervisors and Admins can access all recordings
+    if is_supervisor_or_admin(role) {
+        return Ok(true);
+    }
+
+    // Agents can only access their own recordings
+    // Get the call associated with this recording to check agent_id
+    let call = crate::server::db::calls::get_by_id(pool, recording.call_id).await?;
+
+    match call {
+        Some(call) => Ok(call.agent_id == Some(user_id)),
+        None => Ok(false), // Recording has no associated call
+    }
+}
 
 /// Search recordings with optional filters
 ///
 /// Supports filtering by agent, campaign, lead, date range, disposition, and compliance hold status.
 /// Results are paginated using limit and offset parameters.
+/// Permission check: Agents can only see their own recordings, Supervisors/Admins can see all.
 pub async fn search_recordings(
     State(state): State<Arc<AppState>>,
     claims: Claims,
-    Query(params): Query<RecordingSearchParams>,
+    Query(mut params): Query<RecordingSearchParams>,
 ) -> Result<Json<Vec<CallRecording>>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Agents should only see their own recordings, Supervisors/Admins can see all
+    // Parse user role
+    let role = parse_role(&claims)?;
+
+    // Permission check: Agents can only search their own recordings
+    if !is_supervisor_or_admin(&role) {
+        // Force agent_id filter to current user for agents
+        params.agent_id = Some(claims.sub);
+        tracing::debug!("Agent {} searching only their own recordings", claims.sub);
+    }
 
     crate::server::db::recordings::search_recordings(&state.db, &params)
         .await
@@ -39,35 +92,66 @@ pub async fn search_recordings(
 /// Get recording details by ID
 ///
 /// Returns metadata for a single recording including file info, retention, and compliance status.
+/// Permission check: Agents can only access their own recordings, Supervisors/Admins can access all.
 pub async fn get_recording_details(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
 ) -> Result<Json<CallRecording>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Agents can only access their own recordings, Supervisors/Admins can access all
+    // Parse user role
+    let role = parse_role(&claims)?;
 
-    crate::server::db::recordings::get_recording(&state.db, id)
+    // Get the recording
+    let recording = crate::server::db::recordings::get_recording(&state.db, id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to get recording {}: {}", id, e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?
-        .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Permission check: Verify user can access this recording
+    let can_access = can_access_recording(&state.db, claims.sub, &role, &recording)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to check recording access: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !can_access {
+        tracing::warn!(
+            "User {} (role: {}) attempted to access recording {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    Ok(Json(recording))
 }
 
 /// Delete a recording by ID
 ///
 /// Permanently removes the recording file from storage and deletes the database record.
 /// Recordings with compliance_hold=true cannot be deleted.
+/// Permission check: Only Supervisors/Admins can delete recordings.
 pub async fn delete_recording_handler(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to delete recordings
+    // Permission check: Only Supervisors/Admins can delete recordings
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to delete recording {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Get recording to check compliance hold and file path
     let recording = crate::server::db::recordings::get_recording(&state.db, id)
@@ -119,14 +203,24 @@ pub async fn delete_recording_handler(
 /// Update compliance hold status for a recording
 ///
 /// When compliance_hold is true, the recording cannot be deleted even if retention period expires.
+/// Permission check: Only Supervisors/Admins can set compliance holds.
 pub async fn update_compliance_hold(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
     Json(req): Json<UpdateComplianceHoldRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to set compliance holds
+    // Permission check: Only Supervisors/Admins can set compliance holds
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to update compliance hold for recording {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Verify recording exists
     crate::server::db::recordings::get_recording(&state.db, id)
@@ -144,6 +238,14 @@ pub async fn update_compliance_hold(
             tracing::error!("Failed to update compliance hold: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+
+    tracing::info!(
+        "User {} (role: {}) {} compliance hold for recording {}",
+        claims.sub,
+        claims.role,
+        if req.compliance_hold { "set" } else { "released" },
+        id
+    );
 
     Ok(StatusCode::OK)
 }
@@ -170,12 +272,16 @@ pub async fn upload_recording(
 ///
 /// Supports HTTP Range requests for partial downloads, which is essential
 /// for large audio files and seeking in audio players.
+/// Permission check: Agents can only download their own recordings, Supervisors/Admins can download all.
 pub async fn download_recording(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
+    // Parse user role
+    let role = parse_role(&claims)?;
+
     // Get recording metadata from database
     let recording = crate::server::db::recordings::get_recording(&state.db, id)
         .await
@@ -185,9 +291,23 @@ pub async fn download_recording(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // TODO: Check permissions - agents can only access their own recordings
-    // Supervisors/Admins can access all recordings
-    // This will be implemented in subtask 4.6
+    // Permission check: Verify user can access this recording
+    let can_access = can_access_recording(&state.db, claims.sub, &role, &recording)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to check recording access: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !can_access {
+        tracing::warn!(
+            "User {} (role: {}) attempted to download recording {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Get storage instance from state
     // For now, we'll need to create a storage instance on demand
@@ -388,11 +508,15 @@ fn parse_range_header(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
 /// This is an alternative implementation that streams the file in chunks
 /// without loading it entirely into memory. However, since we decrypt the
 /// entire file, this doesn't provide much benefit currently.
+/// Permission check: Agents can only stream their own recordings, Supervisors/Admins can stream all.
 pub async fn stream_recording(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
 ) -> Result<Response, StatusCode> {
+    // Parse user role
+    let role = parse_role(&claims)?;
+
     // Get recording metadata from database
     let recording = crate::server::db::recordings::get_recording(&state.db, id)
         .await
@@ -401,6 +525,24 @@ pub async fn stream_recording(
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Permission check: Verify user can access this recording
+    let can_access = can_access_recording(&state.db, claims.sub, &role, &recording)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to check recording access: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !can_access {
+        tracing::warn!(
+            "User {} (role: {}) attempted to stream recording {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Get storage instance
     let storage_config = crate::server::storage::StorageConfig::from_env()
@@ -455,12 +597,21 @@ pub async fn stream_recording(
 /// Get all retention policies
 ///
 /// Returns a list of all retention policies, ordered by default status and creation date.
+/// Permission check: Only Supervisors/Admins can view retention policies.
 pub async fn get_retention_policies(
     State(state): State<Arc<AppState>>,
     claims: Claims,
 ) -> Result<Json<Vec<RecordingRetentionPolicy>>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to view retention policies
+    // Permission check: Only Supervisors/Admins can view retention policies
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to view retention policies without permission",
+            claims.sub,
+            claims.role
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     crate::server::db::recordings::get_all_retention_policies(&state.db)
         .await
@@ -474,13 +625,23 @@ pub async fn get_retention_policies(
 /// Get a retention policy by ID
 ///
 /// Returns the details of a specific retention policy.
+/// Permission check: Only Supervisors/Admins can view retention policies.
 pub async fn get_retention_policy(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
 ) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to view retention policies
+    // Permission check: Only Supervisors/Admins can view retention policies
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to view retention policy {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     crate::server::db::recordings::get_retention_policy(&state.db, id)
         .await
@@ -496,13 +657,22 @@ pub async fn get_retention_policy(
 ///
 /// Creates a new retention policy with the specified parameters.
 /// Validates that campaign/agent IDs are provided when applies_to is Campaign/Agent.
+/// Permission check: Only Supervisors/Admins can create retention policies.
 pub async fn create_retention_policy(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Json(req): Json<CreateRetentionPolicyRequest>,
 ) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to create retention policies
+    // Permission check: Only Supervisors/Admins can create retention policies
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to create retention policy without permission",
+            claims.sub,
+            claims.role
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Validate request
     if let Err(e) = validate_retention_policy_request(&req) {
@@ -527,14 +697,24 @@ pub async fn create_retention_policy(
 /// Update a retention policy
 ///
 /// Updates an existing retention policy with new parameters.
+/// Permission check: Only Supervisors/Admins can update retention policies.
 pub async fn update_retention_policy(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
     Json(req): Json<CreateRetentionPolicyRequest>,
 ) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to update retention policies
+    // Permission check: Only Supervisors/Admins can update retention policies
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to update retention policy {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Validate request
     if let Err(e) = validate_retention_policy_request(&req) {
@@ -567,13 +747,23 @@ pub async fn update_retention_policy(
 /// Delete a retention policy
 ///
 /// Deletes a retention policy. Default policies cannot be deleted if they are the only default.
+/// Permission check: Only Supervisors/Admins can delete retention policies.
 pub async fn delete_retention_policy_handler(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to delete retention policies
+    // Permission check: Only Supervisors/Admins can delete retention policies
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to delete retention policy {} without permission",
+            claims.sub,
+            claims.role,
+            id
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Verify policy exists
     let policy = crate::server::db::recordings::get_retention_policy(&state.db, id)
@@ -642,12 +832,21 @@ fn validate_retention_policy_request(req: &CreateRetentionPolicyRequest) -> Resu
 ///
 /// Returns comprehensive storage statistics including total files, size, quota usage,
 /// and daily usage history for the past 30 days.
+/// Permission check: Only Supervisors/Admins can view storage stats.
 pub async fn get_storage_stats(
     State(state): State<Arc<AppState>>,
     claims: Claims,
 ) -> Result<Json<crate::models::recording::StorageStats>, StatusCode> {
-    // TODO: Permission check will be added in subtask 4.6
-    // Only Supervisors/Admins should be able to view storage stats
+    // Permission check: Only Supervisors/Admins can view storage stats
+    let role = parse_role(&claims)?;
+    if !is_supervisor_or_admin(&role) {
+        tracing::warn!(
+            "User {} (role: {}) attempted to view storage stats without permission",
+            claims.sub,
+            claims.role
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     // Load storage configuration
     let storage_config = crate::server::storage::StorageConfig::from_env()
