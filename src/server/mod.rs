@@ -439,6 +439,7 @@ async fn assign_lead(
 
 async fn get_agents(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Agent>>, StatusCode> {
     db::agents::get_all(&state.db)
         .await
@@ -448,6 +449,7 @@ async fn get_agents(
 
 async fn get_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Agent>, StatusCode> {
     db::agents::get_by_id(&state.db, id)
@@ -459,6 +461,7 @@ async fn get_agent(
 
 async fn create_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
     db::agents::create(&state.db, req)
@@ -469,6 +472,7 @@ async fn create_agent(
 
 async fn update_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
@@ -480,6 +484,7 @@ async fn update_agent(
 
 async fn update_agent_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<UpdateAgentStatusRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
