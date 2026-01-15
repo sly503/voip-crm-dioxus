@@ -6,14 +6,17 @@
 //! - Local filesystem storage with encryption support
 //! - Storage quota management and tracking
 //! - Automatic directory structure organization (YYYY/MM/DD)
+//! - Database-integrated usage tracking
 
 pub mod encryption;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use chrono::{DateTime, Utc};
 use thiserror::Error;
+use sqlx::PgPool;
 use encryption::EncryptionContext;
 
 /// Storage configuration loaded from environment variables
@@ -159,11 +162,70 @@ pub trait RecordingStorage: Send + Sync {
     async fn check_quota(&self, file_size: u64) -> StorageResult<bool>;
 }
 
-/// Local filesystem storage implementation
+/// Storage usage tracker for database integration
+pub struct StorageUsageTracker {
+    pool: PgPool,
+}
+
+impl StorageUsageTracker {
+    /// Create a new storage usage tracker
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Update storage statistics in the database
+    pub async fn update_stats(&self, total_files: u64, total_size_bytes: u64) -> StorageResult<()> {
+        let today = Utc::now().date_naive();
+
+        crate::server::db::recordings::update_daily_storage_stats(
+            &self.pool,
+            today,
+            total_files as i64,
+            total_size_bytes as i64,
+        )
+        .await
+        .map_err(|e| StorageError::OperationFailed(format!("Failed to update storage stats: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Record a recording addition
+    pub async fn record_addition(&self) -> StorageResult<()> {
+        crate::server::db::recordings::increment_recordings_added(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(format!("Failed to record addition: {}", e)))?;
+        Ok(())
+    }
+
+    /// Record a recording deletion
+    pub async fn record_deletion(&self) -> StorageResult<()> {
+        crate::server::db::recordings::increment_recordings_deleted(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(format!("Failed to record deletion: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get recent usage history
+    pub async fn get_history(&self, days: i32) -> StorageResult<Vec<crate::models::recording::StorageUsage>> {
+        crate::server::db::recordings::get_usage_history(&self.pool, days)
+            .await
+            .map_err(|e| StorageError::OperationFailed(format!("Failed to get usage history: {}", e)))
+    }
+
+    /// Get total storage stats from database
+    pub async fn get_db_stats(&self) -> StorageResult<(i64, i64)> {
+        crate::server::db::recordings::get_total_storage_stats(&self.pool)
+            .await
+            .map_err(|e| StorageError::OperationFailed(format!("Failed to get storage stats: {}", e)))
+    }
+}
+
+/// Local filesystem storage implementation with optional database tracking
 pub struct LocalFileStorage {
     base_path: PathBuf,
     max_storage_bytes: u64,
     encryption_ctx: EncryptionContext,
+    usage_tracker: Option<Arc<StorageUsageTracker>>,
 }
 
 impl LocalFileStorage {
@@ -185,7 +247,37 @@ impl LocalFileStorage {
             base_path: base_path.as_ref().to_path_buf(),
             max_storage_bytes: (max_storage_gb * 1024.0 * 1024.0 * 1024.0) as u64,
             encryption_ctx,
+            usage_tracker: None,
         }
+    }
+
+    /// Create a new local file storage with database tracking
+    ///
+    /// # Arguments
+    /// * `base_path` - Base directory for storing recordings
+    /// * `max_storage_gb` - Maximum storage quota in gigabytes
+    /// * `encryption_ctx` - Encryption context for securing recordings
+    /// * `pool` - Database connection pool for usage tracking
+    ///
+    /// # Returns
+    /// * `Self` - New local file storage instance with tracking
+    pub fn with_tracking(
+        base_path: impl AsRef<Path>,
+        max_storage_gb: f64,
+        encryption_ctx: EncryptionContext,
+        pool: PgPool,
+    ) -> Self {
+        Self {
+            base_path: base_path.as_ref().to_path_buf(),
+            max_storage_bytes: (max_storage_gb * 1024.0 * 1024.0 * 1024.0) as u64,
+            encryption_ctx,
+            usage_tracker: Some(Arc::new(StorageUsageTracker::new(pool))),
+        }
+    }
+
+    /// Get the usage tracker if available
+    pub fn usage_tracker(&self) -> Option<Arc<StorageUsageTracker>> {
+        self.usage_tracker.clone()
     }
 
     /// Initialize storage directory structure
@@ -304,6 +396,19 @@ impl RecordingStorage for LocalFileStorage {
             file_size
         );
 
+        // Update usage tracking if available
+        if let Some(tracker) = &self.usage_tracker {
+            if let Err(e) = tracker.record_addition().await {
+                tracing::warn!("Failed to update usage tracking: {}", e);
+            }
+
+            // Update daily stats
+            let (total_files, total_size) = self.calculate_usage().await?;
+            if let Err(e) = tracker.update_stats(total_files, total_size).await {
+                tracing::warn!("Failed to update storage stats: {}", e);
+            }
+        }
+
         Ok(RecordingFile {
             file_path: relative_path,
             file_size,
@@ -348,6 +453,19 @@ impl RecordingStorage for LocalFileStorage {
             let _ = Self::cleanup_empty_dirs(parent, &self.base_path).await;
         }
 
+        // Update usage tracking if available
+        if let Some(tracker) = &self.usage_tracker {
+            if let Err(e) = tracker.record_deletion().await {
+                tracing::warn!("Failed to update deletion tracking: {}", e);
+            }
+
+            // Update daily stats
+            let (total_files, total_size) = self.calculate_usage().await?;
+            if let Err(e) = tracker.update_stats(total_files, total_size).await {
+                tracing::warn!("Failed to update storage stats: {}", e);
+            }
+        }
+
         Ok(())
     }
 
@@ -370,6 +488,49 @@ impl RecordingStorage for LocalFileStorage {
 }
 
 impl LocalFileStorage {
+    /// Get comprehensive storage statistics including quota information
+    pub async fn get_storage_stats(&self) -> StorageResult<crate::models::recording::StorageStats> {
+        let info = self.get_storage_info().await?;
+
+        let total_size_gb = info.total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let quota_gb = self.max_storage_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let quota_percentage = if self.max_storage_bytes > 0 {
+            (info.total_size_bytes as f64 / self.max_storage_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Get daily usage history if tracker is available
+        let daily_usage = if let Some(tracker) = &self.usage_tracker {
+            tracker.get_history(30).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        Ok(crate::models::recording::StorageStats {
+            total_files: info.total_files as i64,
+            total_size_bytes: info.total_size_bytes as i64,
+            total_size_gb,
+            quota_gb,
+            quota_percentage,
+            daily_usage,
+        })
+    }
+
+    /// Check if storage is approaching quota (>80%)
+    pub async fn is_quota_warning(&self) -> StorageResult<bool> {
+        let (_, used_bytes) = self.calculate_usage().await?;
+        let usage_percentage = (used_bytes as f64 / self.max_storage_bytes as f64) * 100.0;
+        Ok(usage_percentage > 80.0)
+    }
+
+    /// Get current storage usage percentage
+    pub async fn get_usage_percentage(&self) -> StorageResult<f64> {
+        let (_, used_bytes) = self.calculate_usage().await?;
+        let usage_percentage = (used_bytes as f64 / self.max_storage_bytes as f64) * 100.0;
+        Ok(usage_percentage)
+    }
+
     /// Clean up empty directories recursively up to base_path
     async fn cleanup_empty_dirs(dir: &Path, base_path: &Path) -> std::io::Result<()> {
         // Don't delete the base path itself
@@ -591,6 +752,57 @@ mod tests {
         assert_eq!(info.total_files, 1);
         // Note: encrypted size will be larger than plaintext due to nonce and auth tag
         assert!(info.total_size_bytes > test_data.len() as u64);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_quota_warning() {
+        let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_quota_warn");
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        // Very small quota for testing
+        let storage = LocalFileStorage::new(&temp_dir, 0.00001, encryption_ctx); // ~10KB
+
+        storage.init().await.unwrap();
+
+        // Initially should not be warning
+        let warning = storage.is_quota_warning().await.unwrap();
+        assert!(!warning);
+
+        // Store enough data to exceed 80%
+        let data = vec![0u8; 9000]; // ~9KB (will be larger encrypted)
+        let _ = storage.store_recording(12345, data, "wav").await;
+
+        // Now should be warning
+        let warning = storage.is_quota_warning().await.unwrap();
+        assert!(warning);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_usage_percentage() {
+        let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_percentage");
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx); // 1GB
+
+        storage.init().await.unwrap();
+
+        // Initially should be 0%
+        let percentage = storage.get_usage_percentage().await.unwrap();
+        assert!(percentage < 1.0);
+
+        // Store some data
+        let data = vec![0u8; 1000];
+        let _ = storage.store_recording(12345, data, "wav").await.unwrap();
+
+        // Should have some usage now
+        let percentage = storage.get_usage_percentage().await.unwrap();
+        assert!(percentage > 0.0);
 
         // Cleanup
         let _ = std::fs::remove_dir_all(temp_dir);
