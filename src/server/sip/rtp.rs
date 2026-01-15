@@ -6,8 +6,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock, Mutex};
 use bytes::{BufMut, Bytes, BytesMut};
+use chrono::{DateTime, Utc};
 
 use super::codec::G711Codec;
 use super::config::SipCodec;
@@ -163,6 +164,132 @@ pub struct AudioFrame {
     pub sequence: u16,
 }
 
+/// Direction of RTP packet flow
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtpDirection {
+    /// Incoming packet (received from remote)
+    Incoming,
+    /// Outgoing packet (sent to remote)
+    Outgoing,
+}
+
+/// Captured RTP packet with metadata
+#[derive(Debug, Clone)]
+pub struct CapturedRtpPacket {
+    /// The RTP packet
+    pub packet: RtpPacket,
+    /// Direction of the packet
+    pub direction: RtpDirection,
+    /// Capture timestamp
+    pub captured_at: DateTime<Utc>,
+}
+
+/// RTP packet recorder for call recording
+/// Captures and stores RTP packets for later processing into audio files
+pub struct RtpRecorder {
+    /// Captured packets buffer
+    packets: Arc<Mutex<Vec<CapturedRtpPacket>>>,
+    /// Maximum packets to buffer (to prevent memory overflow)
+    max_packets: usize,
+    /// Recording enabled flag
+    enabled: Arc<RwLock<bool>>,
+}
+
+impl RtpRecorder {
+    /// Create a new RTP recorder
+    ///
+    /// # Arguments
+    /// * `max_packets` - Maximum number of packets to buffer (default: 100,000 for ~1 hour at 20ms intervals)
+    ///
+    /// # Returns
+    /// * `Self` - New RTP recorder instance
+    pub fn new(max_packets: Option<usize>) -> Self {
+        Self {
+            packets: Arc::new(Mutex::new(Vec::new())),
+            max_packets: max_packets.unwrap_or(100_000),
+            enabled: Arc::new(RwLock::new(false)),
+        }
+    }
+
+    /// Start recording RTP packets
+    pub async fn start(&self) {
+        *self.enabled.write().await = true;
+        tracing::info!("RTP recording started");
+    }
+
+    /// Stop recording RTP packets
+    pub async fn stop(&self) {
+        *self.enabled.write().await = false;
+        tracing::info!("RTP recording stopped");
+    }
+
+    /// Check if recording is enabled
+    pub async fn is_enabled(&self) -> bool {
+        *self.enabled.read().await
+    }
+
+    /// Capture an RTP packet
+    ///
+    /// # Arguments
+    /// * `packet` - The RTP packet to capture
+    /// * `direction` - Direction of the packet (incoming/outgoing)
+    pub async fn capture(&self, packet: RtpPacket, direction: RtpDirection) {
+        if !self.is_enabled().await {
+            return;
+        }
+
+        let mut packets = self.packets.lock().await;
+
+        // Check if we've hit the buffer limit
+        if packets.len() >= self.max_packets {
+            tracing::warn!(
+                "RTP recorder buffer full ({} packets), dropping oldest packet",
+                self.max_packets
+            );
+            packets.remove(0);
+        }
+
+        let captured = CapturedRtpPacket {
+            packet,
+            direction,
+            captured_at: Utc::now(),
+        };
+
+        packets.push(captured);
+    }
+
+    /// Get all captured packets
+    ///
+    /// # Returns
+    /// * `Vec<CapturedRtpPacket>` - All captured packets
+    pub async fn get_packets(&self) -> Vec<CapturedRtpPacket> {
+        self.packets.lock().await.clone()
+    }
+
+    /// Get packet count
+    ///
+    /// # Returns
+    /// * `usize` - Number of captured packets
+    pub async fn packet_count(&self) -> usize {
+        self.packets.lock().await.len()
+    }
+
+    /// Clear all captured packets
+    pub async fn clear(&self) {
+        self.packets.lock().await.clear();
+        tracing::debug!("RTP recorder buffer cleared");
+    }
+
+    /// Drain all captured packets (consuming them)
+    ///
+    /// # Returns
+    /// * `Vec<CapturedRtpPacket>` - All captured packets (buffer is cleared after this call)
+    pub async fn drain_packets(&self) -> Vec<CapturedRtpPacket> {
+        let mut packets = self.packets.lock().await;
+        std::mem::take(&mut *packets)
+    }
+}
+
 /// RTP Session for a SIP call
 pub struct RtpSession {
     /// Local UDP socket for RTP
@@ -185,6 +312,8 @@ pub struct RtpSession {
     audio_rx: RwLock<Option<mpsc::Receiver<AudioFrame>>>,
     /// Running flag
     running: RwLock<bool>,
+    /// RTP packet recorder for call recording
+    recorder: Option<Arc<RtpRecorder>>,
 }
 
 impl RtpSession {
@@ -210,7 +339,21 @@ impl RtpSession {
             audio_tx,
             audio_rx: RwLock::new(Some(audio_rx)),
             running: RwLock::new(false),
+            recorder: None,
         })
+    }
+
+    /// Enable recording for this RTP session
+    /// Creates and returns an RTP recorder that will capture all packets
+    pub fn enable_recording(&mut self) -> Arc<RtpRecorder> {
+        let recorder = Arc::new(RtpRecorder::new(None));
+        self.recorder = Some(recorder.clone());
+        recorder
+    }
+
+    /// Get the RTP recorder if recording is enabled
+    pub fn recorder(&self) -> Option<&Arc<RtpRecorder>> {
+        self.recorder.as_ref()
     }
 
     /// Try to bind to a port, trying multiple ports if necessary
@@ -265,6 +408,7 @@ impl RtpSession {
         let audio_tx = self.audio_tx.clone();
         let codec_type = self.payload_type;
         let _running = Arc::new(*self.running.read().await);
+        let recorder = self.recorder.clone();
 
         // Spawn receiver task
         tokio::spawn(async move {
@@ -280,6 +424,11 @@ impl RtpSession {
                 match socket.recv_from(&mut buf).await {
                     Ok((len, _addr)) => {
                         if let Ok(packet) = RtpPacket::from_bytes(&buf[..len]) {
+                            // Capture packet for recording if enabled
+                            if let Some(ref rec) = recorder {
+                                rec.capture(packet.clone(), RtpDirection::Incoming).await;
+                            }
+
                             // Decode audio
                             let samples = codec.decode(&packet.payload);
 
@@ -337,6 +486,11 @@ impl RtpSession {
         let header = RtpHeader::new(self.payload_type, sequence, timestamp, self.ssrc);
         let packet = RtpPacket::new(header, payload);
 
+        // Capture packet for recording if enabled
+        if let Some(ref recorder) = self.recorder {
+            recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        }
+
         // Send
         self.socket.send_to(&packet.to_bytes(), remote_addr).await?;
 
@@ -364,6 +518,11 @@ impl RtpSession {
 
         let header = RtpHeader::new(self.payload_type, sequence, timestamp, self.ssrc);
         let packet = RtpPacket::new(header, Bytes::copy_from_slice(encoded));
+
+        // Capture packet for recording if enabled
+        if let Some(ref recorder) = self.recorder {
+            recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        }
 
         self.socket.send_to(&packet.to_bytes(), remote_addr).await?;
 
@@ -410,5 +569,146 @@ impl RtpPortAllocator {
         } else {
             port
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_rtp_recorder_basic() {
+        let recorder = RtpRecorder::new(None);
+
+        // Initially disabled
+        assert!(!recorder.is_enabled().await);
+        assert_eq!(recorder.packet_count().await, 0);
+
+        // Start recording
+        recorder.start().await;
+        assert!(recorder.is_enabled().await);
+
+        // Stop recording
+        recorder.stop().await;
+        assert!(!recorder.is_enabled().await);
+    }
+
+    #[tokio::test]
+    async fn test_rtp_recorder_capture() {
+        let recorder = RtpRecorder::new(None);
+        recorder.start().await;
+
+        // Create a test packet
+        let header = RtpHeader::new(0, 100, 1000, 12345);
+        let payload = Bytes::from(vec![1, 2, 3, 4, 5]);
+        let packet = RtpPacket::new(header, payload);
+
+        // Capture packet
+        recorder.capture(packet.clone(), RtpDirection::Incoming).await;
+        assert_eq!(recorder.packet_count().await, 1);
+
+        // Capture another packet
+        recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        assert_eq!(recorder.packet_count().await, 2);
+
+        // Verify packets
+        let packets = recorder.get_packets().await;
+        assert_eq!(packets.len(), 2);
+        assert_eq!(packets[0].direction, RtpDirection::Incoming);
+        assert_eq!(packets[1].direction, RtpDirection::Outgoing);
+    }
+
+    #[tokio::test]
+    async fn test_rtp_recorder_disabled_no_capture() {
+        let recorder = RtpRecorder::new(None);
+        // Don't start recording
+
+        let header = RtpHeader::new(0, 100, 1000, 12345);
+        let payload = Bytes::from(vec![1, 2, 3, 4, 5]);
+        let packet = RtpPacket::new(header, payload);
+
+        // Try to capture while disabled
+        recorder.capture(packet, RtpDirection::Incoming).await;
+
+        // Should not capture anything
+        assert_eq!(recorder.packet_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_rtp_recorder_buffer_limit() {
+        let recorder = RtpRecorder::new(Some(5)); // Small buffer for testing
+        recorder.start().await;
+
+        let header = RtpHeader::new(0, 100, 1000, 12345);
+        let payload = Bytes::from(vec![1, 2, 3]);
+        let packet = RtpPacket::new(header, payload);
+
+        // Fill buffer
+        for _ in 0..5 {
+            recorder.capture(packet.clone(), RtpDirection::Incoming).await;
+        }
+        assert_eq!(recorder.packet_count().await, 5);
+
+        // Add one more - should drop oldest
+        recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        assert_eq!(recorder.packet_count().await, 5);
+
+        // Verify the last packet is outgoing (oldest incoming was dropped)
+        let packets = recorder.get_packets().await;
+        assert_eq!(packets.last().unwrap().direction, RtpDirection::Outgoing);
+    }
+
+    #[tokio::test]
+    async fn test_rtp_recorder_clear() {
+        let recorder = RtpRecorder::new(None);
+        recorder.start().await;
+
+        let header = RtpHeader::new(0, 100, 1000, 12345);
+        let payload = Bytes::from(vec![1, 2, 3]);
+        let packet = RtpPacket::new(header, payload);
+
+        // Capture some packets
+        recorder.capture(packet.clone(), RtpDirection::Incoming).await;
+        recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        assert_eq!(recorder.packet_count().await, 2);
+
+        // Clear
+        recorder.clear().await;
+        assert_eq!(recorder.packet_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_rtp_recorder_drain() {
+        let recorder = RtpRecorder::new(None);
+        recorder.start().await;
+
+        let header = RtpHeader::new(0, 100, 1000, 12345);
+        let payload = Bytes::from(vec![1, 2, 3]);
+        let packet = RtpPacket::new(header, payload);
+
+        // Capture packets
+        recorder.capture(packet.clone(), RtpDirection::Incoming).await;
+        recorder.capture(packet.clone(), RtpDirection::Outgoing).await;
+        assert_eq!(recorder.packet_count().await, 2);
+
+        // Drain packets
+        let packets = recorder.drain_packets().await;
+        assert_eq!(packets.len(), 2);
+        assert_eq!(recorder.packet_count().await, 0); // Buffer should be empty
+    }
+
+    #[tokio::test]
+    async fn test_rtp_session_with_recorder() {
+        let mut session = RtpSession::new(10000, super::super::config::SipCodec::PCMU)
+            .await
+            .unwrap();
+
+        // Enable recording
+        let recorder = session.enable_recording();
+        recorder.start().await;
+
+        // Verify recorder is attached
+        assert!(session.recorder().is_some());
+        assert!(recorder.is_enabled().await);
     }
 }
