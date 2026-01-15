@@ -3,13 +3,13 @@
   "spec": "002-call-recording-and-playback",
   "state": "building",
   "subtasks": {
-    "completed": 9,
+    "completed": 12,
     "total": 39,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Recording Storage Backend",
+    "current": "SIP/RTP Recording Integration",
     "id": null,
     "total": 5
   },
@@ -18,8 +18,8 @@
     "max": 1
   },
   "session": {
-    "number": 11,
+    "number": 14,
     "started_at": "2026-01-15T20:19:56.167719"
   },
-  "last_update": "2026-01-15T20:48:19.531165"
+  "last_update": "2026-01-15T20:59:52.027994"
 }

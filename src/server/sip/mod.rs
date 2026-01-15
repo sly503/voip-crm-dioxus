@@ -11,6 +11,7 @@ mod config;
 mod codec;
 mod rtp;
 mod audio_mixer;
+mod audio_converter;
 mod user_agent;
 mod call;
 
@@ -26,6 +27,8 @@ pub use codec::G711Codec;
 pub use rtp::RtpSession;
 #[allow(unused_imports)]
 pub use audio_mixer::{AudioMixer, MixMode};
+#[allow(unused_imports)]
+pub use audio_converter::AudioConverter;
 
 use thiserror::Error;
 

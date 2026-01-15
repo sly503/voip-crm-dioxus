@@ -88,6 +88,9 @@ bytes = "1"
 # Encryption for call recordings
 aes-gcm = "0.10"
 
+# WAV file format for call recordings
+hound = "3.5"
+
 # Network interface detection
 get_if_addrs = "0.5"
 
