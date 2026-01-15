@@ -85,7 +85,7 @@ pub struct StorageUsage {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RecordingSearchParams {
     #[serde(rename = "agentId")]
     pub agent_id: Option<i64>,

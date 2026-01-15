@@ -4,6 +4,7 @@ use crate::components::{
     leads::{LeadList, LeadDetails},
     supervisor::{CampaignList, AgentList, SupervisorDashboard},
     ai::PromptEditor,
+    recordings::{RecordingList, RecordingSearch, StorageDashboard},
 };
 use crate::state::{AUTH_STATE, UI_STATE};
 use crate::AppLayout;
@@ -27,6 +28,9 @@ pub enum Route {
 
         #[route("/ai-settings")]
         AISettings {},
+
+        #[route("/recordings")]
+        Recordings {},
 
         #[route("/settings")]
         Settings {},
@@ -175,6 +179,64 @@ fn AISettings() -> Element {
                 match view() {
                     "prompts" => rsx! { PromptEditor {} },
                     _ => rsx! { crate::components::ai::AISettings {} },
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn Recordings() -> Element {
+    let mut search_params = use_signal(|| crate::models::recording::RecordingSearchParams::default());
+    let mut view = use_signal(|| "recordings");
+
+    rsx! {
+        div { class: "flex-1 flex flex-col overflow-hidden",
+            // Top navigation tabs
+            div { class: "bg-white border-b px-6",
+                div { class: "flex gap-4",
+                    button {
+                        class: "py-4 px-2 border-b-2 transition-colors",
+                        class: if view() == "recordings" { "border-blue-600 text-blue-600" } else { "border-transparent text-gray-500 hover:text-gray-700" },
+                        onclick: move |_| view.set("recordings"),
+                        "Recordings"
+                    }
+                    button {
+                        class: "py-4 px-2 border-b-2 transition-colors",
+                        class: if view() == "storage" { "border-blue-600 text-blue-600" } else { "border-transparent text-gray-500 hover:text-gray-700" },
+                        onclick: move |_| view.set("storage"),
+                        "Storage Dashboard"
+                    }
+                }
+            }
+
+            // Content area
+            div { class: "flex-1 flex flex-col overflow-hidden",
+                match view() {
+                    "storage" => rsx! {
+                        div { class: "flex-1 overflow-auto p-6 bg-gray-50",
+                            StorageDashboard {}
+                        }
+                    },
+                    _ => rsx! {
+                        div { class: "flex-1 flex flex-col overflow-hidden",
+                            // Search filters
+                            div { class: "bg-white border-b p-6",
+                                RecordingSearch {
+                                    on_search: move |params| {
+                                        search_params.set(params);
+                                    }
+                                }
+                            }
+
+                            // Recordings list
+                            div { class: "flex-1 overflow-auto p-6 bg-gray-50",
+                                RecordingList {
+                                    search_params: search_params()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
