@@ -16,6 +16,78 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 use encryption::EncryptionContext;
 
+/// Storage configuration loaded from environment variables
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    pub recordings_path: PathBuf,
+    pub max_storage_gb: f64,
+    pub default_retention_days: i32,
+    pub encryption_key: String,
+}
+
+impl StorageConfig {
+    /// Load storage configuration from environment variables
+    pub fn from_env() -> Result<Self, String> {
+        let recordings_path = std::env::var("RECORDINGS_PATH")
+            .unwrap_or_else(|_| "./recordings".to_string());
+
+        let max_storage_gb = std::env::var("MAX_STORAGE_GB")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(100.0);
+
+        let default_retention_days = std::env::var("DEFAULT_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(90);
+
+        let encryption_key = std::env::var("ENCRYPTION_KEY")
+            .map_err(|_| "ENCRYPTION_KEY environment variable not set")?;
+
+        // Validate encryption key format (should be 64 hex characters for 32 bytes)
+        if encryption_key.len() != 64 {
+            return Err(format!(
+                "ENCRYPTION_KEY must be 64 hex characters (32 bytes), got {} characters",
+                encryption_key.len()
+            ));
+        }
+
+        Ok(Self {
+            recordings_path: PathBuf::from(recordings_path),
+            max_storage_gb,
+            default_retention_days,
+            encryption_key,
+        })
+    }
+
+    /// Initialize the storage system
+    /// Creates the base directory and returns a LocalFileStorage instance
+    pub async fn initialize(self) -> StorageResult<LocalFileStorage> {
+        // Create encryption context
+        let encryption_ctx = EncryptionContext::from_hex(&self.encryption_key, "default")
+            .map_err(|e| StorageError::Encryption(e.to_string()))?;
+
+        // Create storage instance
+        let storage = LocalFileStorage::new(
+            &self.recordings_path,
+            self.max_storage_gb,
+            encryption_ctx,
+        );
+
+        // Initialize directory structure
+        storage.init().await?;
+
+        tracing::info!(
+            "Storage initialized: path={:?}, quota={}GB, retention={}days",
+            self.recordings_path,
+            self.max_storage_gb,
+            self.default_retention_days
+        );
+
+        Ok(storage)
+    }
+}
+
 /// Storage-related errors
 #[derive(Error, Debug)]
 pub enum StorageError {
@@ -325,6 +397,60 @@ impl LocalFileStorage {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_storage_config_from_env() {
+        // Set up test environment variables
+        std::env::set_var("RECORDINGS_PATH", "/tmp/test_recordings");
+        std::env::set_var("MAX_STORAGE_GB", "50");
+        std::env::set_var("DEFAULT_RETENTION_DAYS", "60");
+        std::env::set_var("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+        let config = StorageConfig::from_env().unwrap();
+
+        assert_eq!(config.recordings_path, PathBuf::from("/tmp/test_recordings"));
+        assert_eq!(config.max_storage_gb, 50.0);
+        assert_eq!(config.default_retention_days, 60);
+        assert_eq!(config.encryption_key.len(), 64);
+
+        // Cleanup
+        std::env::remove_var("RECORDINGS_PATH");
+        std::env::remove_var("MAX_STORAGE_GB");
+        std::env::remove_var("DEFAULT_RETENTION_DAYS");
+        std::env::remove_var("ENCRYPTION_KEY");
+    }
+
+    #[test]
+    fn test_storage_config_defaults() {
+        // Ensure ENCRYPTION_KEY is set (required)
+        std::env::set_var("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+        // Remove optional vars to test defaults
+        std::env::remove_var("RECORDINGS_PATH");
+        std::env::remove_var("MAX_STORAGE_GB");
+        std::env::remove_var("DEFAULT_RETENTION_DAYS");
+
+        let config = StorageConfig::from_env().unwrap();
+
+        assert_eq!(config.recordings_path, PathBuf::from("./recordings"));
+        assert_eq!(config.max_storage_gb, 100.0);
+        assert_eq!(config.default_retention_days, 90);
+
+        // Cleanup
+        std::env::remove_var("ENCRYPTION_KEY");
+    }
+
+    #[test]
+    fn test_storage_config_invalid_key() {
+        std::env::set_var("ENCRYPTION_KEY", "too_short");
+
+        let result = StorageConfig::from_env();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("64 hex characters"));
+
+        // Cleanup
+        std::env::remove_var("ENCRYPTION_KEY");
+    }
+
     #[tokio::test]
     async fn test_local_storage_init() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage");
@@ -334,6 +460,36 @@ mod tests {
 
         storage.init().await.unwrap();
         assert!(temp_dir.exists());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_directory_structure_creation() {
+        let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_dirs");
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx);
+
+        storage.init().await.unwrap();
+
+        // Store a file - this should create YYYY/MM/DD directories
+        let test_data = b"test recording data".to_vec();
+        let result = storage.store_recording(99999, test_data, "wav").await.unwrap();
+
+        // Verify the path contains date structure
+        let now = Utc::now();
+        let expected_date_path = now.format("%Y/%m/%d").to_string();
+        assert!(result.file_path.contains(&expected_date_path));
+
+        // Verify the physical directory exists
+        let full_path = temp_dir.join(&result.file_path);
+        assert!(full_path.exists());
+
+        // Verify parent directories exist
+        let parent = full_path.parent().unwrap();
+        assert!(parent.exists());
 
         // Cleanup
         let _ = std::fs::remove_dir_all(temp_dir);
