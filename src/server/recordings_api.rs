@@ -636,6 +636,59 @@ fn validate_retention_policy_request(req: &CreateRetentionPolicyRequest) -> Resu
     Ok(())
 }
 
+// ============== Storage Dashboard Endpoint ==============
+
+/// Get storage statistics for the dashboard
+///
+/// Returns comprehensive storage statistics including total files, size, quota usage,
+/// and daily usage history for the past 30 days.
+pub async fn get_storage_stats(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+) -> Result<Json<crate::models::recording::StorageStats>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to view storage stats
+
+    // Load storage configuration
+    let storage_config = crate::server::storage::StorageConfig::from_env()
+        .map_err(|e| {
+            tracing::error!("Failed to load storage config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Initialize storage with database tracking for usage history
+    let storage = crate::server::storage::LocalFileStorage::with_tracking(
+        storage_config.recordings_path,
+        storage_config.max_storage_gb,
+        crate::server::storage::encryption::EncryptionContext::from_hex(
+            &storage_config.encryption_key,
+            "default"
+        ).map_err(|e| {
+            tracing::error!("Failed to create encryption context: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
+        state.db.clone(),
+    );
+
+    // Get comprehensive storage statistics
+    let stats = storage.get_storage_stats()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get storage stats: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::debug!(
+        "Storage stats: {} files, {:.2} GB / {:.2} GB ({:.1}%)",
+        stats.total_files,
+        stats.total_size_gb,
+        stats.quota_gb,
+        stats.quota_percentage
+    );
+
+    Ok(Json(stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

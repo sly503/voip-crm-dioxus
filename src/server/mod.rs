@@ -143,6 +143,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/recordings/{id}/compliance-hold", put(recordings_api::update_compliance_hold))
         .route("/api/recordings/{id}/download", get(recordings_api::download_recording))
         .route("/api/recordings/{id}/stream", get(recordings_api::stream_recording))
+        .route("/api/recordings/storage/stats", get(recordings_api::get_storage_stats))
 
         // Retention policy routes
         .route("/api/retention-policies", get(recordings_api::get_retention_policies).post(recordings_api::create_retention_policy))
