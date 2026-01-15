@@ -1,8 +1,9 @@
 //! Recording database operations
 
 use sqlx::PgPool;
-use chrono::{NaiveDate, Utc};
+use chrono::{NaiveDate, Utc, DateTime};
 use crate::models::recording::{CallRecording, StorageUsage, RecordingSearchParams, RecordingRetentionPolicy, CreateRetentionPolicyRequest};
+use std::net::IpAddr;
 
 /// Insert a new call recording
 pub async fn insert_recording(
@@ -527,6 +528,136 @@ pub async fn calculate_retention_until(
     );
 
     Ok(Utc::now() + chrono::Duration::days(default_days))
+}
+
+// Audit Log Functions
+
+/// Log a recording audit event
+///
+/// This function manually logs audit events to the recording_audit_log table.
+/// Some events (uploaded, deleted, hold_set, hold_released) are automatically
+/// logged by database triggers, but this function is needed for events like
+/// downloads that occur in API handlers.
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `recording_id` - ID of the recording being accessed
+/// * `action` - Action being performed (uploaded, downloaded, deleted, hold_set, hold_released)
+/// * `user_id` - Optional ID of the user performing the action (None for system actions)
+/// * `ip_address` - Optional IP address of the request
+/// * `metadata` - Optional additional context as JSON
+///
+/// # Example
+/// ```ignore
+/// log_audit_event(
+///     &pool,
+///     recording_id,
+///     "downloaded",
+///     Some(user_id),
+///     Some(ip_addr),
+///     Some(json!({"user_agent": "Mozilla/5.0"}))
+/// ).await?;
+/// ```
+pub async fn log_audit_event(
+    pool: &PgPool,
+    recording_id: i64,
+    action: &str,
+    user_id: Option<i64>,
+    ip_address: Option<IpAddr>,
+    metadata: Option<serde_json::Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO recording_audit_log (recording_id, action, user_id, ip_address, metadata)
+        VALUES ($1, $2::recording_audit_action, $3, $4, $5)
+        "#
+    )
+    .bind(recording_id)
+    .bind(action)
+    .bind(user_id)
+    .bind(ip_address)
+    .bind(metadata)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Get audit log entries for a specific recording
+///
+/// Returns all audit log entries for a recording, ordered by timestamp descending.
+/// This is useful for displaying access history and compliance reporting.
+pub async fn get_recording_audit_log(
+    pool: &PgPool,
+    recording_id: i64,
+) -> Result<Vec<RecordingAuditLog>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingAuditLog>(
+        r#"
+        SELECT id, recording_id, action, user_id, timestamp, ip_address, metadata
+        FROM recording_audit_log
+        WHERE recording_id = $1
+        ORDER BY timestamp DESC
+        "#
+    )
+    .bind(recording_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Get recent audit log entries across all recordings
+///
+/// Returns recent audit log entries with optional filtering.
+/// Useful for compliance dashboards and monitoring.
+pub async fn get_recent_audit_log(
+    pool: &PgPool,
+    limit: i64,
+    action_filter: Option<&str>,
+    user_id_filter: Option<i64>,
+) -> Result<Vec<RecordingAuditLog>, sqlx::Error> {
+    let mut query = String::from(
+        r#"
+        SELECT id, recording_id, action, user_id, timestamp, ip_address, metadata
+        FROM recording_audit_log
+        WHERE 1=1
+        "#
+    );
+
+    let mut bind_count = 1;
+
+    if action_filter.is_some() {
+        query.push_str(&format!(" AND action = ${}::recording_audit_action", bind_count));
+        bind_count += 1;
+    }
+
+    if user_id_filter.is_some() {
+        query.push_str(&format!(" AND user_id = ${}", bind_count));
+        bind_count += 1;
+    }
+
+    query.push_str(&format!(" ORDER BY timestamp DESC LIMIT ${}", bind_count));
+
+    let mut query_builder = sqlx::query_as::<_, RecordingAuditLog>(&query);
+
+    if let Some(action) = action_filter {
+        query_builder = query_builder.bind(action);
+    }
+    if let Some(uid) = user_id_filter {
+        query_builder = query_builder.bind(uid);
+    }
+    query_builder = query_builder.bind(limit);
+
+    query_builder.fetch_all(pool).await
+}
+
+// Struct for audit log entries
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct RecordingAuditLog {
+    pub id: i64,
+    pub recording_id: i64,
+    pub action: String,
+    pub user_id: Option<i64>,
+    pub timestamp: DateTime<Utc>,
+    pub ip_address: Option<IpAddr>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

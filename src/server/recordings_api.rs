@@ -374,6 +374,21 @@ pub async fn download_recording(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // Log download event to audit log
+    // Note: We don't extract IP address in this basic implementation
+    // In production, you would extract it from headers (X-Forwarded-For, X-Real-IP, etc.)
+    if let Err(e) = crate::server::db::recordings::log_audit_event(
+        &state.db,
+        id,
+        "downloaded",
+        Some(claims.sub),
+        None, // TODO: Extract IP from headers
+        None, // No additional metadata needed for downloads
+    ).await {
+        tracing::error!("Failed to log download audit event: {}", e);
+        // Don't fail the request if audit logging fails, just log the error
+    }
+
     // Get storage instance from state
     // For now, we'll need to create a storage instance on demand
     // In a production system, this would be part of AppState
@@ -607,6 +622,19 @@ pub async fn stream_recording(
             id
         );
         return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Log stream event to audit log (streaming is a form of download/access)
+    if let Err(e) = crate::server::db::recordings::log_audit_event(
+        &state.db,
+        id,
+        "downloaded", // Use "downloaded" action for streaming as well
+        Some(claims.sub),
+        None, // TODO: Extract IP from headers
+        Some(serde_json::json!({"method": "stream"})), // Mark that this was a stream access
+    ).await {
+        tracing::error!("Failed to log stream audit event: {}", e);
+        // Don't fail the request if audit logging fails, just log the error
     }
 
     // Get storage instance
