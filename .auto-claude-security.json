@@ -158,6 +158,9 @@
     "dropuser",
     "initdb",
     "mdbook",
+    "node",
+    "npm",
+    "npx",
     "pg_ctl",
     "pg_dump",
     "pg_dumpall",
@@ -177,6 +180,7 @@
   "custom_commands": [],
   "detected_stack": {
     "languages": [
+      "javascript",
       "rust"
     ],
     "package_managers": [
@@ -200,7 +204,7 @@
     "cargo_aliases": [],
     "shell_scripts": []
   },
-  "project_dir": "/home/fatjon2026/voip-crm-dioxus/.auto-claude/worktrees/tasks/001-api-authentication-protection",
-  "created_at": "2026-01-15T16:29:58.322225",
-  "project_hash": "ef5f6de3e047789dc4a85b5162daa404"
+  "project_dir": "/home/fatjon2026/voip-crm-dioxus",
+  "created_at": "2026-01-15T15:47:46.258315",
+  "project_hash": "1477d706e8bbde0fde04008ad4e21b8b"
 }
