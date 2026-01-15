@@ -280,6 +280,11 @@ impl LocalFileStorage {
         self.usage_tracker.clone()
     }
 
+    /// Get the base path for storage
+    pub fn base_path(&self) -> &PathBuf {
+        &self.base_path
+    }
+
     /// Initialize storage directory structure
     pub async fn init(&self) -> StorageResult<()> {
         fs::create_dir_all(&self.base_path).await?;
