@@ -3,7 +3,7 @@
   "spec": "002-call-recording-and-playback",
   "state": "building",
   "subtasks": {
-    "completed": 22,
+    "completed": 23,
     "total": 39,
     "in_progress": 1,
     "failed": 0
@@ -18,8 +18,8 @@
     "max": 1
   },
   "session": {
-    "number": 24,
+    "number": 25,
     "started_at": "2026-01-15T20:19:56.167719"
   },
-  "last_update": "2026-01-15T21:34:07.765348"
+  "last_update": "2026-01-15T21:36:22.733214"
 }
