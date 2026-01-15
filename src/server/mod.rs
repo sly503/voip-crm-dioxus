@@ -578,6 +578,7 @@ async fn stop_campaign(
 
 async fn dial_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<DialRequest>,
 ) -> Result<Json<DialResponse>, StatusCode> {
     // Get lead phone number
@@ -631,6 +632,7 @@ struct DirectDialRequest {
 /// Direct dial a phone number without a lead
 async fn direct_dial(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<DirectDialRequest>,
 ) -> Result<Json<DialResponse>, StatusCode> {
     // Initiate call via Telnyx
@@ -670,6 +672,7 @@ async fn direct_dial(
 
 async fn hangup_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -697,6 +700,7 @@ async fn hangup_call(
 
 async fn transfer_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<TransferRequest>,
 ) -> Result<StatusCode, StatusCode> {
@@ -716,6 +720,7 @@ async fn transfer_call(
 
 async fn hold_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -734,6 +739,7 @@ async fn hold_call(
 
 async fn unhold_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -752,6 +758,7 @@ async fn unhold_call(
 
 async fn get_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Call>, StatusCode> {
     db::calls::get_by_id(&state.db, id)
