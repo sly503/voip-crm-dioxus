@@ -176,6 +176,7 @@ struct SipStatusResponse {
 
 async fn get_sip_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Json<SipStatusResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
         let agent = sip_agent.read().await;
@@ -220,6 +221,7 @@ struct SipDialResponse {
 
 async fn sip_dial(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<SipDialRequest>,
 ) -> Json<SipDialResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
@@ -283,6 +285,7 @@ struct SipHangupResponse {
 
 async fn sip_hangup(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<SipHangupRequest>,
 ) -> Json<SipHangupResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
