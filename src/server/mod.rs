@@ -155,6 +155,7 @@ struct WebRTCConfig {
 
 async fn get_webrtc_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Json<WebRTCConfig> {
     Json(WebRTCConfig {
         sip_username: state.sip_username.clone(),
@@ -175,6 +176,7 @@ struct SipStatusResponse {
 
 async fn get_sip_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Json<SipStatusResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
         let agent = sip_agent.read().await;
@@ -219,6 +221,7 @@ struct SipDialResponse {
 
 async fn sip_dial(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<SipDialRequest>,
 ) -> Json<SipDialResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
@@ -282,6 +285,7 @@ struct SipHangupResponse {
 
 async fn sip_hangup(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<SipHangupRequest>,
 ) -> Json<SipHangupResponse> {
     if let Some(ref sip_agent) = state.sip_agent {
@@ -315,6 +319,7 @@ async fn sip_hangup(
 
 async fn get_leads(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Lead>>, StatusCode> {
     db::leads::get_all(&state.db)
         .await
@@ -348,6 +353,7 @@ async fn get_my_leads(
 
 async fn get_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::get_by_id(&state.db, id)
@@ -359,6 +365,7 @@ async fn get_lead(
 
 async fn create_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::create(&state.db, req)
@@ -369,6 +376,7 @@ async fn create_lead(
 
 async fn update_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -380,6 +388,7 @@ async fn update_lead(
 
 async fn delete_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     db::leads::delete(&state.db, id)
@@ -390,6 +399,7 @@ async fn delete_lead(
 
 async fn add_lead_note(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<AddNoteRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -401,6 +411,7 @@ async fn add_lead_note(
 
 async fn update_lead_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<UpdateStatusRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -418,6 +429,7 @@ struct AssignLeadRequest {
 
 async fn assign_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<AssignLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -431,6 +443,7 @@ async fn assign_lead(
 
 async fn get_agents(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Agent>>, StatusCode> {
     db::agents::get_all(&state.db)
         .await
@@ -440,6 +453,7 @@ async fn get_agents(
 
 async fn get_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Agent>, StatusCode> {
     db::agents::get_by_id(&state.db, id)
@@ -451,6 +465,7 @@ async fn get_agent(
 
 async fn create_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
     db::agents::create(&state.db, req)
@@ -461,6 +476,7 @@ async fn create_agent(
 
 async fn update_agent(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
@@ -472,6 +488,7 @@ async fn update_agent(
 
 async fn update_agent_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<UpdateAgentStatusRequest>,
 ) -> Result<Json<Agent>, StatusCode> {
@@ -485,6 +502,7 @@ async fn update_agent_status(
 
 async fn get_campaigns(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Campaign>>, StatusCode> {
     db::campaigns::get_all(&state.db)
         .await
@@ -494,6 +512,7 @@ async fn get_campaigns(
 
 async fn get_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::get_by_id(&state.db, id)
@@ -505,6 +524,7 @@ async fn get_campaign(
 
 async fn create_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::create(&state.db, req)
@@ -515,6 +535,7 @@ async fn create_campaign(
 
 async fn update_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<Campaign>, StatusCode> {
@@ -526,6 +547,7 @@ async fn update_campaign(
 
 async fn start_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Active)
@@ -536,6 +558,7 @@ async fn start_campaign(
 
 async fn pause_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Paused)
@@ -546,6 +569,7 @@ async fn pause_campaign(
 
 async fn stop_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Completed)
@@ -558,6 +582,7 @@ async fn stop_campaign(
 
 async fn dial_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<DialRequest>,
 ) -> Result<Json<DialResponse>, StatusCode> {
     // Get lead phone number
@@ -611,6 +636,7 @@ struct DirectDialRequest {
 /// Direct dial a phone number without a lead
 async fn direct_dial(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<DirectDialRequest>,
 ) -> Result<Json<DialResponse>, StatusCode> {
     // Initiate call via Telnyx
@@ -650,6 +676,7 @@ async fn direct_dial(
 
 async fn hangup_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -677,6 +704,7 @@ async fn hangup_call(
 
 async fn transfer_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<TransferRequest>,
 ) -> Result<StatusCode, StatusCode> {
@@ -696,6 +724,7 @@ async fn transfer_call(
 
 async fn hold_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -714,6 +743,7 @@ async fn hold_call(
 
 async fn unhold_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     let call = db::calls::get_by_id(&state.db, id)
@@ -732,6 +762,7 @@ async fn unhold_call(
 
 async fn get_call(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Call>, StatusCode> {
     db::calls::get_by_id(&state.db, id)
@@ -838,6 +869,7 @@ async fn handle_telnyx_webhook(
 
 async fn get_realtime_stats(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let stats = db::stats::get_realtime(&state.db)
         .await
@@ -847,6 +879,7 @@ async fn get_realtime_stats(
 
 async fn get_agent_stats(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<AgentStats>, StatusCode> {
     db::stats::get_agent_stats(&state.db, id)
@@ -859,6 +892,7 @@ async fn get_agent_stats(
 
 async fn get_all_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<AiAgentSettings>>, StatusCode> {
     db::ai::get_all_settings(&state.db)
         .await
@@ -868,6 +902,7 @@ async fn get_all_ai_settings(
 
 async fn get_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
 ) -> Result<Json<Option<AiAgentSettings>>, StatusCode> {
     db::ai::get_settings(&state.db, agent_id)
@@ -878,6 +913,7 @@ async fn get_ai_settings(
 
 async fn upsert_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
     Json(req): Json<UpsertAiSettingsRequest>,
 ) -> Result<Json<AiAgentSettings>, StatusCode> {
@@ -898,6 +934,7 @@ async fn upsert_ai_settings(
 
 async fn delete_ai_settings(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(agent_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     db::ai::delete_settings(&state.db, agent_id)
@@ -908,6 +945,7 @@ async fn delete_ai_settings(
 
 async fn get_global_ai_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<GlobalAiConfig>, StatusCode> {
     db::ai::get_global_config(&state.db)
         .await
@@ -920,6 +958,7 @@ async fn get_global_ai_config(
 
 async fn update_global_ai_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(config): Json<GlobalAiConfig>,
 ) -> Result<Json<GlobalAiConfig>, StatusCode> {
     db::ai::update_global_config(&state.db, &config)
@@ -933,6 +972,7 @@ async fn update_global_ai_config(
 
 async fn get_prompt_templates(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<PromptTemplate>>, StatusCode> {
     db::ai::get_all_templates(&state.db)
         .await
@@ -945,6 +985,7 @@ async fn get_prompt_templates(
 
 async fn create_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(template): Json<PromptTemplate>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
     db::ai::create_template(&state.db, &template)
@@ -958,6 +999,7 @@ async fn create_prompt_template(
 
 async fn get_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
     db::ai::get_template(&state.db, &id)
@@ -972,6 +1014,7 @@ async fn get_prompt_template(
 
 async fn update_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(template): Json<PromptTemplate>,
 ) -> Result<Json<PromptTemplate>, StatusCode> {
@@ -986,6 +1029,7 @@ async fn update_prompt_template(
 
 async fn delete_prompt_template(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     db::ai::delete_template(&state.db, &id)
@@ -1009,6 +1053,7 @@ struct AutomationStatus {
 
 async fn start_campaign_automation(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     // Start the campaign automation
@@ -1030,6 +1075,7 @@ async fn start_campaign_automation(
 
 async fn stop_campaign_automation(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     state.automation.stop_campaign(campaign_id)
@@ -1045,6 +1091,7 @@ async fn stop_campaign_automation(
 
 async fn get_automation_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Json<AutomationStatus> {
     if let Some(status) = state.automation.get_status(campaign_id).await {
