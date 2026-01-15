@@ -258,79 +258,47 @@ pub async fn update_compliance_hold(
 pub async fn upload_recording(
     State(state): State<Arc<AppState>>,
     claims: Claims,
-    Json(req): Json<CreateRecordingRequest>,
+    Json(request): Json<CreateRecordingRequest>,
 ) -> Result<Json<CallRecording>, StatusCode> {
-    // Note: In a real implementation, the audio data would come from the SIP stack
-    // This is a placeholder showing how recordings would be saved with automatic retention calculation
+    // Get storage from state
+    let storage = state.storage.as_ref().ok_or_else(|| {
+        tracing::error!("Storage not configured");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
 
-    // TODO: This will be integrated with the SIP recording system in phase 3
-    // The actual file data would come from the RTP packet capture and audio mixing
+    // Calculate retention_until
+    let retention_until = db::recordings::calculate_retention_until(
+        &state.db,
+        request.call_id,
+    )
+    .await
+    .unwrap_or_else(|_| {
+        let days = std::env::var("DEFAULT_RETENTION_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(90);
+        chrono::Utc::now() + chrono::Duration::days(days)
+    });
 
-    // Example implementation pattern (when integrated with actual recording data):
-    //
-    // 1. Get the call to extract campaign_id and agent_id
-    // let call = crate::server::db::calls::get_by_id(&state.db, req.call_id)
-    //     .await
-    //     .map_err(|e| {
-    //         tracing::error!("Failed to get call: {}", e);
-    //         StatusCode::INTERNAL_SERVER_ERROR
-    //     })?
-    //     .ok_or(StatusCode::NOT_FOUND)?;
-    //
-    // 2. Calculate retention_until based on policies
-    // let retention_until = crate::server::db::recordings::calculate_retention_until(
-    //     &state.db,
-    //     call.campaign_id,
-    //     call.agent_id,
-    // )
-    // .await
-    // .map_err(|e| {
-    //     tracing::error!("Failed to calculate retention: {}", e);
-    //     StatusCode::INTERNAL_SERVER_ERROR
-    // })?;
-    //
-    // 3. Store the recording file in encrypted storage
-    // let storage_config = crate::server::storage::StorageConfig::from_env()
-    //     .map_err(|e| {
-    //         tracing::error!("Failed to load storage config: {}", e);
-    //         StatusCode::INTERNAL_SERVER_ERROR
-    //     })?;
-    //
-    // let storage = storage_config.initialize()
-    //     .await
-    //     .map_err(|e| {
-    //         tracing::error!("Failed to initialize storage: {}", e);
-    //         StatusCode::INTERNAL_SERVER_ERROR
-    //     })?;
-    //
-    // let file_path = storage.store_recording(&audio_data)
-    //     .await
-    //     .map_err(|e| {
-    //         tracing::error!("Failed to store recording: {}", e);
-    //         StatusCode::INTERNAL_SERVER_ERROR
-    //     })?;
-    //
-    // 4. Save recording metadata to database with calculated retention_until
-    // let recording = crate::server::db::recordings::insert_recording(
-    //     &state.db,
-    //     req.call_id,
-    //     &file_path,
-    //     file_size,
-    //     duration_seconds,
-    //     "wav",
-    //     "default",
-    //     retention_until,  // Automatically calculated based on policies!
-    //     metadata,
-    // )
-    // .await
-    // .map_err(|e| {
-    //     tracing::error!("Failed to insert recording: {}", e);
-    //     StatusCode::INTERNAL_SERVER_ERROR
-    // })?;
-    //
-    // Ok(Json(recording))
+    // Insert recording into database
+    let recording = db::recordings::insert_recording(
+        &state.db,
+        request.call_id,
+        &request.file_path,
+        request.file_size,
+        request.duration_seconds,
+        &request.format,
+        &request.encryption_key_id,
+        retention_until,
+        request.metadata.map(|m| serde_json::to_value(m).ok()).flatten(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to insert recording: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    Err(StatusCode::NOT_IMPLEMENTED)
+    Ok(Json(recording))
 }
 
 /// Download a recording file with streaming support
@@ -374,36 +342,37 @@ pub async fn download_recording(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // Extract IP address from headers for audit logging
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+        });
+
     // Log download event to audit log
-    // Note: We don't extract IP address in this basic implementation
-    // In production, you would extract it from headers (X-Forwarded-For, X-Real-IP, etc.)
     if let Err(e) = crate::server::db::recordings::log_audit_event(
         &state.db,
         id,
         "downloaded",
         Some(claims.sub),
-        None, // TODO: Extract IP from headers
+        ip_address,
         None, // No additional metadata needed for downloads
     ).await {
         tracing::error!("Failed to log download audit event: {}", e);
         // Don't fail the request if audit logging fails, just log the error
     }
 
-    // Get storage instance from state
-    // For now, we'll need to create a storage instance on demand
-    // In a production system, this would be part of AppState
-    let storage_config = crate::server::storage::StorageConfig::from_env()
-        .map_err(|e| {
-            tracing::error!("Failed to load storage config: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let storage = storage_config.initialize()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to initialize storage: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    // Get storage from state
+    let storage = state.storage.as_ref().ok_or_else(|| {
+        tracing::error!("Storage not configured");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
 
     // Read the file with streaming
     let file_path = recording.file_path.clone();
@@ -593,6 +562,7 @@ pub async fn stream_recording(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<i64>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     // Parse user role
     let role = parse_role(&claims)?;
@@ -624,32 +594,37 @@ pub async fn stream_recording(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // Extract IP address from headers for audit logging
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+        });
+
     // Log stream event to audit log (streaming is a form of download/access)
     if let Err(e) = crate::server::db::recordings::log_audit_event(
         &state.db,
         id,
         "downloaded", // Use "downloaded" action for streaming as well
         Some(claims.sub),
-        None, // TODO: Extract IP from headers
+        ip_address,
         Some(serde_json::json!({"method": "stream"})), // Mark that this was a stream access
     ).await {
         tracing::error!("Failed to log stream audit event: {}", e);
         // Don't fail the request if audit logging fails, just log the error
     }
 
-    // Get storage instance
-    let storage_config = crate::server::storage::StorageConfig::from_env()
-        .map_err(|e| {
-            tracing::error!("Failed to load storage config: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let storage = storage_config.initialize()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to initialize storage: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    // Get storage from state
+    let storage = state.storage.as_ref().ok_or_else(|| {
+        tracing::error!("Storage not configured");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
 
     // For streaming, we need to decrypt first (current limitation)
     let file_data = storage.get_recording(&recording.file_path)
@@ -941,29 +916,14 @@ pub async fn get_storage_stats(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Load storage configuration
-    let storage_config = crate::server::storage::StorageConfig::from_env()
-        .map_err(|e| {
-            tracing::error!("Failed to load storage config: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    // Get storage from state
+    let storage = state.storage.as_ref().ok_or_else(|| {
+        tracing::error!("Storage not configured");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
 
-    // Initialize storage with database tracking for usage history
-    let storage = crate::server::storage::LocalFileStorage::with_tracking(
-        storage_config.recordings_path,
-        storage_config.max_storage_gb,
-        crate::server::storage::encryption::EncryptionContext::from_hex(
-            &storage_config.encryption_key,
-            "default"
-        ).map_err(|e| {
-            tracing::error!("Failed to create encryption context: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?,
-        state.db.clone(),
-    );
-
-    // Get comprehensive storage statistics
-    let stats = storage.get_storage_stats()
+    // Get statistics
+    let stats = storage.get_storage_stats(&state.db)
         .await
         .map_err(|e| {
             tracing::error!("Failed to get storage stats: {}", e);

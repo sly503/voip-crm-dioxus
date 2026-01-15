@@ -54,6 +54,8 @@ pub struct AppState {
     pub sip_password: String,
     /// Optional SIP User Agent for direct SIP trunk calls
     pub sip_agent: Option<Arc<tokio::sync::RwLock<sip::SipUserAgent>>>,
+    /// Optional storage system for call recordings
+    pub storage: Option<Arc<dyn storage::RecordingStorage + Send + Sync>>,
 }
 
 /// Create the Axum router with all API routes
@@ -1190,6 +1192,30 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
             ).expect("Failed to create fallback email service")
         });
 
+    // Initialize storage system for call recordings
+    let storage = match storage::StorageConfig::from_env() {
+        Ok(config) => {
+            match config.initialize() {
+                Ok(storage) => {
+                    tracing::info!(
+                        "Storage initialized: path={}, quota={}GB",
+                        config.recordings_path,
+                        config.max_storage_gb
+                    );
+                    Some(Arc::new(storage) as Arc<dyn storage::RecordingStorage + Send + Sync>)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize storage: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Storage not configured: {}. Recording features will be disabled.", e);
+            None
+        }
+    };
+
     // Optionally initialize SIP User Agent for direct trunk calls
     let sip_agent = if let Some(sip_config) = sip::SipConfig::from_env() {
         tracing::info!("SIP trunk configured: {}:{}", sip_config.trunk_host, sip_config.trunk_port);
@@ -1221,7 +1247,31 @@ pub async fn run_server(database_url: &str, port: u16) -> anyhow::Result<()> {
         sip_username,
         sip_password,
         sip_agent,
+        storage,
     };
+
+    // Start retention policy scheduler if storage is configured
+    if let Some(ref storage) = state.storage {
+        let automation_clone = Arc::clone(&state.automation);
+        let storage_clone = Arc::clone(storage);
+        tokio::spawn(async move {
+            automation_clone.start_retention_scheduler(storage_clone).await;
+        });
+
+        tracing::info!("Retention policy scheduler started");
+    }
+
+    // Start storage monitoring if storage is configured
+    if let Some(ref storage) = state.storage {
+        let automation_clone = Arc::clone(&state.automation);
+        let storage_clone = Arc::clone(storage);
+        let email_clone = Arc::new(state.email.clone());
+        tokio::spawn(async move {
+            automation_clone.start_storage_monitoring(storage_clone, email_clone).await;
+        });
+
+        tracing::info!("Storage monitoring started");
+    }
 
     let app = create_router(state);
 
