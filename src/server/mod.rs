@@ -87,6 +87,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/leads/{id}/notes", post(add_lead_note))
         .route("/api/leads/{id}/status", put(update_lead_status))
         .route("/api/leads/{id}/assign", put(assign_lead))
+        .route("/api/leads/{id}/calls", get(get_lead_calls))
 
         // Agent routes
         .route("/api/agents", get(get_agents).post(create_agent))
@@ -448,6 +449,17 @@ async fn assign_lead(
     Json(req): Json<AssignLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::assign(&state.db, id, req.agent_id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn get_lead_calls(
+    State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<Vec<Call>>, StatusCode> {
+    db::calls::get_by_lead(&state.db, id)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
