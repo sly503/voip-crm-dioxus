@@ -68,3 +68,7 @@ pub enum SipError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+// Integration tests for RTP recording and audio mixing
+#[cfg(test)]
+mod recording_integration_tests;
