@@ -2,7 +2,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -11,9 +11,142 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
-use crate::models::recording::{CallRecording, CreateRecordingRequest};
+use crate::models::recording::{CallRecording, CreateRecordingRequest, RecordingSearchParams, UpdateComplianceHoldRequest};
 use crate::server::{AppState, auth::Claims};
 use crate::server::storage::{RecordingStorage, StorageError};
+
+/// Search recordings with optional filters
+///
+/// Supports filtering by agent, campaign, lead, date range, disposition, and compliance hold status.
+/// Results are paginated using limit and offset parameters.
+pub async fn search_recordings(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Query(params): Query<RecordingSearchParams>,
+) -> Result<Json<Vec<CallRecording>>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Agents should only see their own recordings, Supervisors/Admins can see all
+
+    crate::server::db::recordings::search_recordings(&state.db, &params)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to search recordings: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+/// Get recording details by ID
+///
+/// Returns metadata for a single recording including file info, retention, and compliance status.
+pub async fn get_recording_details(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+) -> Result<Json<CallRecording>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Agents can only access their own recordings, Supervisors/Admins can access all
+
+    crate::server::db::recordings::get_recording(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get recording {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Delete a recording by ID
+///
+/// Permanently removes the recording file from storage and deletes the database record.
+/// Recordings with compliance_hold=true cannot be deleted.
+pub async fn delete_recording_handler(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to delete recordings
+
+    // Get recording to check compliance hold and file path
+    let recording = crate::server::db::recordings::get_recording(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get recording {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Check if recording is under compliance hold
+    if recording.compliance_hold {
+        tracing::warn!("Attempted to delete recording {} under compliance hold", id);
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Delete file from storage first
+    let storage_config = crate::server::storage::StorageConfig::from_env()
+        .map_err(|e| {
+            tracing::error!("Failed to load storage config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let storage = storage_config.initialize()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to initialize storage: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    storage.delete_recording(&recording.file_path)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete recording file: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Delete database record
+    crate::server::db::recordings::delete_recording(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete recording from database: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Update compliance hold status for a recording
+///
+/// When compliance_hold is true, the recording cannot be deleted even if retention period expires.
+pub async fn update_compliance_hold(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateComplianceHoldRequest>,
+) -> Result<StatusCode, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to set compliance holds
+
+    // Verify recording exists
+    crate::server::db::recordings::get_recording(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get recording {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Update compliance hold
+    crate::server::db::recordings::set_compliance_hold(&state.db, id, req.compliance_hold)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update compliance hold: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::OK)
+}
 
 /// Upload a recording file
 ///
