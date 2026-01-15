@@ -16,6 +16,7 @@ pub mod claude;
 pub mod automation;
 pub mod ai_call_handler;
 pub mod email;
+pub mod storage;
 
 use axum::{
     routing::{get, post, put},
