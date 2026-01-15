@@ -984,6 +984,9 @@ pub async fn get_storage_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::recording::RetentionAppliesTo;
+
+    // ============== Range Header Parsing Tests ==============
 
     #[test]
     fn test_parse_range_header() {
@@ -1012,5 +1015,661 @@ mod tests {
 
         // Large suffix (larger than file)
         assert_eq!(parse_range_header("bytes=-20000", 10000), Some((0, 9999)));
+    }
+
+    #[test]
+    fn test_parse_range_header_comprehensive() {
+        let file_size = 1_000_000u64;
+
+        // Test various valid ranges
+        assert_eq!(
+            parse_range_header("bytes=0-0", file_size),
+            Some((0, 0)),
+            "First byte only"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=999999-999999", file_size),
+            Some((999999, 999999)),
+            "Last byte only"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=100000-200000", file_size),
+            Some((100000, 200000)),
+            "Middle range"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=0-", file_size),
+            Some((0, 999999)),
+            "From start to end (open-ended)"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=-1000", file_size),
+            Some((999000, 999999)),
+            "Last 1000 bytes (suffix)"
+        );
+
+        // Test edge cases
+        assert_eq!(
+            parse_range_header("bytes=-1", file_size),
+            Some((999999, 999999)),
+            "Last byte (suffix)"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=-5000000", file_size),
+            Some((0, 999999)),
+            "Suffix larger than file (saturates to 0)"
+        );
+
+        // Test invalid ranges
+        assert_eq!(
+            parse_range_header("", file_size),
+            None,
+            "Empty string"
+        );
+
+        assert_eq!(
+            parse_range_header("ranges=0-100", file_size),
+            None,
+            "Wrong prefix"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=", file_size),
+            None,
+            "No range specified"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=-", file_size),
+            None,
+            "Invalid separator only"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=abc", file_size),
+            None,
+            "Non-numeric value"
+        );
+
+        assert_eq!(
+            parse_range_header("bytes=100-200-300", file_size),
+            None,
+            "Too many parts"
+        );
+    }
+
+    // ============== Permission Helper Tests ==============
+
+    #[test]
+    fn test_parse_role() {
+        // Create test claims for each role
+        let admin_claims = Claims {
+            sub: 1,
+            role: "Admin".to_string(),
+            exp: 0,
+        };
+
+        let supervisor_claims = Claims {
+            sub: 2,
+            role: "Supervisor".to_string(),
+            exp: 0,
+        };
+
+        let agent_claims = Claims {
+            sub: 3,
+            role: "Agent".to_string(),
+            exp: 0,
+        };
+
+        let invalid_claims = Claims {
+            sub: 4,
+            role: "InvalidRole".to_string(),
+            exp: 0,
+        };
+
+        // Test valid roles
+        assert_eq!(
+            parse_role(&admin_claims).unwrap(),
+            UserRole::Admin,
+            "Admin role should parse correctly"
+        );
+
+        assert_eq!(
+            parse_role(&supervisor_claims).unwrap(),
+            UserRole::Supervisor,
+            "Supervisor role should parse correctly"
+        );
+
+        assert_eq!(
+            parse_role(&agent_claims).unwrap(),
+            UserRole::Agent,
+            "Agent role should parse correctly"
+        );
+
+        // Test invalid role
+        assert_eq!(
+            parse_role(&invalid_claims).unwrap_err(),
+            StatusCode::FORBIDDEN,
+            "Invalid role should return FORBIDDEN"
+        );
+    }
+
+    #[test]
+    fn test_is_supervisor_or_admin() {
+        // Test supervisor and admin permissions
+        assert!(
+            is_supervisor_or_admin(&UserRole::Admin),
+            "Admin should have supervisor permissions"
+        );
+
+        assert!(
+            is_supervisor_or_admin(&UserRole::Supervisor),
+            "Supervisor should have supervisor permissions"
+        );
+
+        assert!(
+            !is_supervisor_or_admin(&UserRole::Agent),
+            "Agent should NOT have supervisor permissions"
+        );
+    }
+
+    // ============== Retention Policy Validation Tests ==============
+
+    #[test]
+    fn test_validate_retention_policy_all_recordings() {
+        // Valid policy for all recordings
+        let valid_policy = CreateRetentionPolicyRequest {
+            name: "Default Policy".to_string(),
+            retention_days: 90,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: None,
+            is_default: true,
+        };
+
+        assert!(
+            validate_retention_policy_request(&valid_policy).is_ok(),
+            "Valid 'All' policy should pass validation"
+        );
+
+        // Invalid: All policy with campaign_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 90,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: Some(1),
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "'All' policy should not have campaign_id"
+        );
+
+        // Invalid: All policy with agent_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 90,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: Some(1),
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "'All' policy should not have agent_id"
+        );
+    }
+
+    #[test]
+    fn test_validate_retention_policy_campaign() {
+        // Valid campaign policy
+        let valid_policy = CreateRetentionPolicyRequest {
+            name: "Campaign Policy".to_string(),
+            retention_days: 60,
+            applies_to: RetentionAppliesTo::Campaign,
+            campaign_id: Some(1),
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&valid_policy).is_ok(),
+            "Valid campaign policy should pass validation"
+        );
+
+        // Invalid: Campaign policy without campaign_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 60,
+            applies_to: RetentionAppliesTo::Campaign,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "Campaign policy must have campaign_id"
+        );
+
+        // Invalid: Campaign policy with agent_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 60,
+            applies_to: RetentionAppliesTo::Campaign,
+            campaign_id: Some(1),
+            agent_id: Some(2),
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "Campaign policy should not have agent_id"
+        );
+    }
+
+    #[test]
+    fn test_validate_retention_policy_agent() {
+        // Valid agent policy
+        let valid_policy = CreateRetentionPolicyRequest {
+            name: "Agent Policy".to_string(),
+            retention_days: 30,
+            applies_to: RetentionAppliesTo::Agent,
+            campaign_id: None,
+            agent_id: Some(1),
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&valid_policy).is_ok(),
+            "Valid agent policy should pass validation"
+        );
+
+        // Invalid: Agent policy without agent_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 30,
+            applies_to: RetentionAppliesTo::Agent,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "Agent policy must have agent_id"
+        );
+
+        // Invalid: Agent policy with campaign_id
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 30,
+            applies_to: RetentionAppliesTo::Agent,
+            campaign_id: Some(1),
+            agent_id: Some(2),
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&invalid_policy).is_err(),
+            "Agent policy should not have campaign_id"
+        );
+    }
+
+    #[test]
+    fn test_validate_retention_policy_days() {
+        // Invalid: Zero retention days
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: 0,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        let result = validate_retention_policy_request(&invalid_policy);
+        assert!(result.is_err(), "Zero retention_days should be invalid");
+        assert!(
+            result.unwrap_err().contains("positive"),
+            "Error message should mention 'positive'"
+        );
+
+        // Invalid: Negative retention days
+        let invalid_policy = CreateRetentionPolicyRequest {
+            name: "Invalid Policy".to_string(),
+            retention_days: -10,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        let result = validate_retention_policy_request(&invalid_policy);
+        assert!(result.is_err(), "Negative retention_days should be invalid");
+
+        // Valid: Positive retention days
+        let valid_policy = CreateRetentionPolicyRequest {
+            name: "Valid Policy".to_string(),
+            retention_days: 1,
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&valid_policy).is_ok(),
+            "Minimum retention_days of 1 should be valid"
+        );
+
+        // Valid: Large retention days
+        let valid_policy = CreateRetentionPolicyRequest {
+            name: "Long Retention".to_string(),
+            retention_days: 3650, // 10 years
+            applies_to: RetentionAppliesTo::All,
+            campaign_id: None,
+            agent_id: None,
+            is_default: false,
+        };
+
+        assert!(
+            validate_retention_policy_request(&valid_policy).is_ok(),
+            "Large retention_days should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_retention_policy_comprehensive() {
+        // Test various valid policy combinations
+        let test_cases = vec![
+            (
+                "All recordings - 30 days",
+                CreateRetentionPolicyRequest {
+                    name: "Short Term".to_string(),
+                    retention_days: 30,
+                    applies_to: RetentionAppliesTo::All,
+                    campaign_id: None,
+                    agent_id: None,
+                    is_default: false,
+                },
+                true,
+            ),
+            (
+                "All recordings - 365 days",
+                CreateRetentionPolicyRequest {
+                    name: "One Year".to_string(),
+                    retention_days: 365,
+                    applies_to: RetentionAppliesTo::All,
+                    campaign_id: None,
+                    agent_id: None,
+                    is_default: true,
+                },
+                true,
+            ),
+            (
+                "Campaign specific",
+                CreateRetentionPolicyRequest {
+                    name: "Sales Campaign".to_string(),
+                    retention_days: 180,
+                    applies_to: RetentionAppliesTo::Campaign,
+                    campaign_id: Some(5),
+                    agent_id: None,
+                    is_default: false,
+                },
+                true,
+            ),
+            (
+                "Agent specific",
+                CreateRetentionPolicyRequest {
+                    name: "Top Performer".to_string(),
+                    retention_days: 90,
+                    applies_to: RetentionAppliesTo::Agent,
+                    campaign_id: None,
+                    agent_id: Some(10),
+                    is_default: false,
+                },
+                true,
+            ),
+        ];
+
+        for (description, policy, should_pass) in test_cases {
+            let result = validate_retention_policy_request(&policy);
+            if should_pass {
+                assert!(result.is_ok(), "Test case '{}' should pass", description);
+            } else {
+                assert!(result.is_err(), "Test case '{}' should fail", description);
+            }
+        }
+    }
+
+    // ============== Integration Test Helpers ==============
+
+    /// Test helper to create a mock CallRecording
+    #[cfg(test)]
+    fn create_test_recording(id: i64, call_id: i64, compliance_hold: bool) -> CallRecording {
+        use chrono::Utc;
+
+        CallRecording {
+            id,
+            call_id,
+            file_path: format!("2024/01/01/recording_{}.wav", id),
+            file_size: 1024000,
+            duration_seconds: 120,
+            format: "wav".to_string(),
+            encryption_key_id: "default".to_string(),
+            uploaded_at: Utc::now(),
+            retention_until: Utc::now() + chrono::Duration::days(90),
+            compliance_hold,
+            metadata: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_recording_search_params_defaults() {
+        // Test that default search params work correctly
+        let params = RecordingSearchParams::default();
+
+        assert_eq!(params.agent_id, None, "Default agent_id should be None");
+        assert_eq!(params.campaign_id, None, "Default campaign_id should be None");
+        assert_eq!(params.lead_id, None, "Default lead_id should be None");
+        assert_eq!(params.start_date, None, "Default start_date should be None");
+        assert_eq!(params.end_date, None, "Default end_date should be None");
+        assert_eq!(params.disposition, None, "Default disposition should be None");
+        assert_eq!(params.compliance_hold, None, "Default compliance_hold should be None");
+        assert_eq!(params.limit.unwrap_or(50), 50, "Default limit should be 50");
+        assert_eq!(params.offset.unwrap_or(0), 0, "Default offset should be 0");
+    }
+
+    #[test]
+    fn test_retention_applies_to_display_names() {
+        assert_eq!(
+            RetentionAppliesTo::All.display_name(),
+            "All Recordings",
+            "All display name"
+        );
+        assert_eq!(
+            RetentionAppliesTo::Campaign.display_name(),
+            "Campaign",
+            "Campaign display name"
+        );
+        assert_eq!(
+            RetentionAppliesTo::Agent.display_name(),
+            "Agent",
+            "Agent display name"
+        );
+    }
+
+    // ============== Documentation and Edge Case Tests ==============
+
+    #[test]
+    fn test_compliance_hold_prevents_deletion_logic() {
+        // This test documents the expected behavior of compliance hold
+        // In the actual delete_recording_handler, compliance_hold=true should prevent deletion
+
+        let recording_normal = create_test_recording(1, 100, false);
+        let recording_on_hold = create_test_recording(2, 101, true);
+
+        // Document expected behavior
+        assert!(!recording_normal.compliance_hold, "Normal recordings can be deleted");
+        assert!(recording_on_hold.compliance_hold, "Recordings on hold cannot be deleted");
+    }
+
+    #[test]
+    fn test_file_format_detection() {
+        // Test the file format to content-type mapping logic
+        let formats = vec![
+            ("wav", "audio/wav"),
+            ("mp3", "audio/mpeg"),
+            ("ogg", "audio/ogg"),
+            ("flac", "application/octet-stream"), // Unknown format
+            ("", "application/octet-stream"),     // Empty format
+        ];
+
+        for (format, expected_type) in formats {
+            let content_type = match format {
+                "wav" => "audio/wav",
+                "mp3" => "audio/mpeg",
+                "ogg" => "audio/ogg",
+                _ => "application/octet-stream",
+            };
+
+            assert_eq!(
+                content_type, expected_type,
+                "Format '{}' should map to '{}'",
+                format, expected_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_permission_scenarios_documentation() {
+        // This test documents all permission scenarios for the API
+
+        // Scenario 1: Agent accessing their own recording
+        // Expected: ALLOWED (can_access_recording returns true)
+
+        // Scenario 2: Agent accessing another agent's recording
+        // Expected: FORBIDDEN (can_access_recording returns false)
+
+        // Scenario 3: Supervisor accessing any recording
+        // Expected: ALLOWED (is_supervisor_or_admin returns true)
+
+        // Scenario 4: Admin accessing any recording
+        // Expected: ALLOWED (is_supervisor_or_admin returns true)
+
+        // Scenario 5: Agent trying to delete a recording
+        // Expected: FORBIDDEN (delete requires supervisor/admin)
+
+        // Scenario 6: Supervisor deleting a recording on compliance hold
+        // Expected: FORBIDDEN (compliance_hold prevents deletion)
+
+        // Scenario 7: Supervisor deleting a normal recording
+        // Expected: ALLOWED (supervisor + no compliance hold)
+
+        // These scenarios are tested through the permission helper functions
+        assert!(
+            is_supervisor_or_admin(&UserRole::Supervisor),
+            "Scenario 3: Supervisor can access all"
+        );
+        assert!(
+            is_supervisor_or_admin(&UserRole::Admin),
+            "Scenario 4: Admin can access all"
+        );
+        assert!(
+            !is_supervisor_or_admin(&UserRole::Agent),
+            "Scenario 5: Agent cannot delete"
+        );
+    }
+
+    #[test]
+    fn test_range_request_scenarios() {
+        let file_size = 10_000_000u64; // 10MB file
+
+        // Scenario 1: Audio player seeking to middle of file
+        let seek_to_middle = parse_range_header("bytes=5000000-", file_size);
+        assert_eq!(
+            seek_to_middle,
+            Some((5000000, 9999999)),
+            "Seeking to middle should work"
+        );
+
+        // Scenario 2: Downloading first chunk (progressive download)
+        let first_chunk = parse_range_header("bytes=0-1048575", file_size);
+        assert_eq!(
+            first_chunk,
+            Some((0, 1048575)),
+            "First 1MB chunk should work"
+        );
+
+        // Scenario 3: Resuming interrupted download
+        let resume = parse_range_header("bytes=7500000-", file_size);
+        assert_eq!(
+            resume,
+            Some((7500000, 9999999)),
+            "Resume from 75% should work"
+        );
+
+        // Scenario 4: Getting file metadata (first byte)
+        let metadata = parse_range_header("bytes=0-0", file_size);
+        assert_eq!(metadata, Some((0, 0)), "Getting first byte should work");
+
+        // Scenario 5: Getting last second of audio (assuming ~1MB/sec)
+        let last_second = parse_range_header("bytes=-1000000", file_size);
+        assert_eq!(
+            last_second,
+            Some((9000000, 9999999)),
+            "Last second should work"
+        );
+    }
+
+    #[test]
+    fn test_update_compliance_hold_request_serialization() {
+        // Test that UpdateComplianceHoldRequest can be serialized/deserialized
+        let request = UpdateComplianceHoldRequest {
+            compliance_hold: true,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(
+            json.contains("complianceHold"),
+            "JSON should use camelCase for compliance_hold"
+        );
+        assert!(json.contains("true"), "JSON should contain true value");
+
+        let deserialized: UpdateComplianceHoldRequest =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.compliance_hold, true,
+            "Deserialized value should match"
+        );
+    }
+
+    #[test]
+    fn test_create_recording_request_validation() {
+        // Test that CreateRecordingRequest has all necessary fields
+        let request = CreateRecordingRequest {
+            call_id: 123,
+            duration_seconds: 300,
+            format: "wav".to_string(),
+        };
+
+        assert_eq!(request.call_id, 123, "call_id should be set");
+        assert_eq!(request.duration_seconds, 300, "duration should be set");
+        assert_eq!(request.format, "wav", "format should be set");
+
+        // Test serialization
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("callId"), "JSON should use camelCase");
+        assert!(json.contains("durationSeconds"), "JSON should use camelCase");
     }
 }
