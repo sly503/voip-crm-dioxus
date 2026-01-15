@@ -459,6 +459,76 @@ pub async fn get_agent_retention_policy(pool: &PgPool, agent_id: i64) -> Result<
     .await
 }
 
+/// Calculate retention_until date for a recording based on applicable policies
+///
+/// This function implements a priority-based policy lookup:
+/// 1. Campaign-specific retention policy (highest priority)
+/// 2. Agent-specific retention policy (medium priority)
+/// 3. Default retention policy (fallback)
+/// 4. DEFAULT_RETENTION_DAYS environment variable (ultimate fallback - 90 days)
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `campaign_id` - Optional campaign ID from the call
+/// * `agent_id` - Optional agent ID from the call
+///
+/// # Returns
+/// DateTime<Utc> representing when the recording should be deleted
+pub async fn calculate_retention_until(
+    pool: &PgPool,
+    campaign_id: Option<i64>,
+    agent_id: Option<i64>,
+) -> Result<DateTime<Utc>, sqlx::Error> {
+    // Try campaign-specific policy first (highest priority)
+    if let Some(cid) = campaign_id {
+        if let Some(policy) = get_campaign_retention_policy(pool, cid).await? {
+            tracing::debug!(
+                "Using campaign retention policy '{}' ({} days) for campaign {}",
+                policy.name,
+                policy.retention_days,
+                cid
+            );
+            return Ok(Utc::now() + chrono::Duration::days(policy.retention_days as i64));
+        }
+    }
+
+    // Try agent-specific policy (medium priority)
+    if let Some(aid) = agent_id {
+        if let Some(policy) = get_agent_retention_policy(pool, aid).await? {
+            tracing::debug!(
+                "Using agent retention policy '{}' ({} days) for agent {}",
+                policy.name,
+                policy.retention_days,
+                aid
+            );
+            return Ok(Utc::now() + chrono::Duration::days(policy.retention_days as i64));
+        }
+    }
+
+    // Try default retention policy (fallback)
+    if let Some(policy) = get_default_retention_policy(pool).await? {
+        tracing::debug!(
+            "Using default retention policy '{}' ({} days)",
+            policy.name,
+            policy.retention_days
+        );
+        return Ok(Utc::now() + chrono::Duration::days(policy.retention_days as i64));
+    }
+
+    // Ultimate fallback: use DEFAULT_RETENTION_DAYS from environment (default: 90 days)
+    let default_days = std::env::var("DEFAULT_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(90);
+
+    tracing::debug!(
+        "No retention policy found, using environment default ({} days)",
+        default_days
+    );
+
+    Ok(Utc::now() + chrono::Duration::days(default_days))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
