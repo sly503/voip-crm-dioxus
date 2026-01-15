@@ -865,6 +865,7 @@ async fn handle_telnyx_webhook(
 
 async fn get_realtime_stats(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let stats = db::stats::get_realtime(&state.db)
         .await
@@ -874,6 +875,7 @@ async fn get_realtime_stats(
 
 async fn get_agent_stats(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<AgentStats>, StatusCode> {
     db::stats::get_agent_stats(&state.db, id)
