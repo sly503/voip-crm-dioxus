@@ -86,6 +86,69 @@ impl AudioConverter {
         Ok(cursor.into_inner())
     }
 
+    /// Read PCM samples from a WAV file
+    ///
+    /// # Arguments
+    /// * `wav_data` - WAV file data as bytes
+    ///
+    /// # Returns
+    /// * `Result<(Vec<i16>, u32, u16), SipError>` - Tuple of (PCM samples, sample rate, channels)
+    ///
+    /// # Examples
+    /// ```
+    /// # use voip_crm::server::sip::audio_converter::AudioConverter;
+    /// # let samples = vec![0i16, 100, 200];
+    /// # let wav_data = AudioConverter::pcm_to_wav(&samples, 8000, 1).unwrap();
+    /// let (pcm_samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+    /// assert_eq!(sample_rate, 8000);
+    /// assert_eq!(channels, 1);
+    /// ```
+    pub fn wav_to_pcm(wav_data: &[u8]) -> Result<(Vec<i16>, u32, u16), SipError> {
+        let cursor = Cursor::new(wav_data);
+
+        let mut reader = hound::WavReader::new(cursor)
+            .map_err(|e| SipError::Codec(format!("Failed to read WAV file: {}", e)))?;
+
+        let spec = reader.spec();
+
+        // Validate format
+        if spec.sample_format != hound::SampleFormat::Int {
+            return Err(SipError::Codec(
+                "Only PCM integer format is supported".to_string(),
+            ));
+        }
+
+        if spec.bits_per_sample != 16 {
+            return Err(SipError::Codec(format!(
+                "Only 16-bit samples are supported, got {}",
+                spec.bits_per_sample
+            )));
+        }
+
+        // Read all samples
+        let samples: Result<Vec<i16>, _> = reader.samples::<i16>().collect();
+        let samples = samples
+            .map_err(|e| SipError::Codec(format!("Failed to read WAV samples: {}", e)))?;
+
+        Ok((samples, spec.sample_rate, spec.channels))
+    }
+
+    /// Load WAV file from filesystem and extract PCM samples
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the WAV file
+    ///
+    /// # Returns
+    /// * `Result<(Vec<i16>, u32, u16), SipError>` - Tuple of (PCM samples, sample rate, channels)
+    pub async fn load_wav_file(file_path: &str) -> Result<(Vec<i16>, u32, u16), SipError> {
+        // Read file asynchronously
+        let wav_data = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| SipError::Codec(format!("Failed to read WAV file '{}': {}", file_path, e)))?;
+
+        Self::wav_to_pcm(&wav_data)
+    }
+
     /// Get the expected WAV file size for given parameters
     ///
     /// # Arguments
@@ -342,5 +405,92 @@ mod tests {
         // Verify bits per sample
         let bits_per_sample = u16::from_le_bytes([wav_data[34], wav_data[35]]);
         assert_eq!(bits_per_sample, 16);
+    }
+
+    #[test]
+    fn test_wav_to_pcm_basic() {
+        // Create a WAV file and read it back
+        let original_samples = vec![0i16, 100, 200, 300, 400, 500];
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 8000, 1).unwrap();
+
+        // Read it back
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 8000);
+        assert_eq!(channels, 1);
+    }
+
+    #[test]
+    fn test_wav_to_pcm_stereo() {
+        // Create a stereo WAV file and read it back
+        let original_samples = vec![100i16, 50, 200, 100, 300, 150];
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 8000, 2).unwrap();
+
+        // Read it back
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 8000);
+        assert_eq!(channels, 2);
+    }
+
+    #[test]
+    fn test_wav_to_pcm_different_sample_rates() {
+        // Test 16kHz
+        let original_samples = vec![0i16, 100, 200, 300];
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 16000, 1).unwrap();
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 16000);
+        assert_eq!(channels, 1);
+
+        // Test 44.1kHz
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 44100, 1).unwrap();
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 44100);
+        assert_eq!(channels, 1);
+    }
+
+    #[test]
+    fn test_wav_to_pcm_large_file() {
+        // Test with a larger audio buffer (1 second at 8kHz)
+        let original_samples: Vec<i16> = (0..8000).map(|i| (i % 1000) as i16).collect();
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 8000, 1).unwrap();
+
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 8000);
+        assert_eq!(channels, 1);
+    }
+
+    #[test]
+    fn test_wav_to_pcm_invalid_data() {
+        // Test with invalid WAV data
+        let invalid_data = vec![0u8, 1, 2, 3, 4, 5];
+        let result = AudioConverter::wav_to_pcm(&invalid_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_to_pcm_empty_data() {
+        // Test with empty data
+        let empty_data: Vec<u8> = vec![];
+        let result = AudioConverter::wav_to_pcm(&empty_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_roundtrip() {
+        // Test complete roundtrip: PCM -> WAV -> PCM
+        let original_samples = vec![i16::MIN, -1000, 0, 1000, i16::MAX];
+        let wav_data = AudioConverter::pcm_to_wav(&original_samples, 8000, 1).unwrap();
+        let (samples, sample_rate, channels) = AudioConverter::wav_to_pcm(&wav_data).unwrap();
+
+        assert_eq!(samples, original_samples);
+        assert_eq!(sample_rate, 8000);
+        assert_eq!(channels, 1);
     }
 }

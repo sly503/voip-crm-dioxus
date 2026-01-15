@@ -99,6 +99,8 @@ pub struct SipCall {
     recorder: Option<Arc<RtpRecorder>>,
     /// Recording enabled flag
     recording_enabled: bool,
+    /// Consent announcement file path (WAV file to play before recording)
+    consent_announcement_path: Option<String>,
 }
 
 impl SipCall {
@@ -125,6 +127,7 @@ impl SipCall {
             dialog_id: None,
             recorder: None,
             recording_enabled: false,
+            consent_announcement_path: None,
         }
     }
 
@@ -151,6 +154,7 @@ impl SipCall {
             dialog_id: None,
             recorder: None,
             recording_enabled: false,
+            consent_announcement_path: None,
         }
     }
 
@@ -172,10 +176,22 @@ impl SipCall {
         if state == CallState::Active && *current != CallState::Active {
             *self.connected_at.write().await = Some(Utc::now());
 
-            // Start recording when call becomes active
+            // Play consent announcement and start recording when call becomes active
             if self.recording_enabled {
-                if let Err(e) = self.start_recording().await {
-                    tracing::error!("Failed to start recording: {}", e);
+                // Play consent announcement first (if configured)
+                match self.play_consent_announcement().await {
+                    Ok(played) => {
+                        if played {
+                            tracing::info!("Consent announcement played, starting recording for call {}", self.call_id);
+                        }
+                        // Start recording after announcement (or immediately if no announcement)
+                        if let Err(e) = self.start_recording().await {
+                            tracing::error!("Failed to start recording: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to play consent announcement: {}. Recording will not start.", e);
+                    }
                 }
             }
         }
@@ -285,6 +301,72 @@ impl SipCall {
     /// Check if recording is enabled
     pub fn is_recording_enabled(&self) -> bool {
         self.recording_enabled
+    }
+
+    /// Set the consent announcement file path
+    /// The file should be a WAV file that will be played before recording starts
+    pub fn set_consent_announcement(&mut self, file_path: Option<String>) {
+        self.consent_announcement_path = file_path;
+    }
+
+    /// Play the consent announcement to the remote party
+    /// Returns true if announcement was played, false if no announcement configured
+    async fn play_consent_announcement(&self) -> Result<bool, SipError> {
+        // Check if consent announcement is configured
+        let announcement_path = match &self.consent_announcement_path {
+            Some(path) => path,
+            None => {
+                tracing::debug!("No consent announcement configured for call {}", self.call_id);
+                return Ok(false);
+            }
+        };
+
+        tracing::info!("Playing consent announcement for call {}: {}", self.call_id, announcement_path);
+
+        // Load the WAV file
+        let (samples, sample_rate, channels) = AudioConverter::load_wav_file(announcement_path).await?;
+
+        tracing::debug!(
+            "Loaded consent announcement: {} samples, {} Hz, {} channels",
+            samples.len(),
+            sample_rate,
+            channels
+        );
+
+        // Convert stereo to mono if needed (mix both channels)
+        let mono_samples = if channels == 2 {
+            // Convert stereo to mono by averaging left and right channels
+            samples
+                .chunks_exact(2)
+                .map(|chunk| {
+                    let left = chunk[0] as i32;
+                    let right = chunk[1] as i32;
+                    ((left + right) / 2) as i16
+                })
+                .collect::<Vec<i16>>()
+        } else {
+            samples
+        };
+
+        // Resample if needed (simple approach: only support 8kHz for now)
+        if sample_rate != 8000 {
+            tracing::warn!(
+                "Consent announcement has sample rate {} Hz, but 8kHz is required. Audio may sound incorrect.",
+                sample_rate
+            );
+        }
+
+        // Send audio in chunks (20ms = 160 samples at 8kHz)
+        const CHUNK_SIZE: usize = 160;
+        for chunk in mono_samples.chunks(CHUNK_SIZE) {
+            self.send_audio(chunk).await?;
+
+            // Wait 20ms between chunks to maintain real-time playback
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+
+        tracing::info!("Consent announcement playback completed for call {}", self.call_id);
+        Ok(true)
     }
 
     /// Start recording RTP packets
@@ -585,5 +667,76 @@ mod tests {
         let result = call.finalize_recording().await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_consent_announcement() {
+        let (tx, _rx) = mpsc::channel(10);
+        let mut call = SipCall::new_outbound(
+            "test-call-8".to_string(),
+            "sip-call-8".to_string(),
+            "local@test.com".to_string(),
+            "remote@test.com".to_string(),
+            tx,
+        );
+
+        // Initially no announcement
+        assert!(call.consent_announcement_path.is_none());
+
+        // Set announcement path
+        call.set_consent_announcement(Some("/path/to/announcement.wav".to_string()));
+        assert_eq!(
+            call.consent_announcement_path,
+            Some("/path/to/announcement.wav".to_string())
+        );
+
+        // Clear announcement
+        call.set_consent_announcement(None);
+        assert!(call.consent_announcement_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_play_consent_announcement_not_configured() {
+        let (tx, _rx) = mpsc::channel(10);
+        let call = SipCall::new_outbound(
+            "test-call-9".to_string(),
+            "sip-call-9".to_string(),
+            "local@test.com".to_string(),
+            "remote@test.com".to_string(),
+            tx,
+        );
+
+        // Try to play without announcement configured
+        let result = call.play_consent_announcement().await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false); // Should return false (not played)
+    }
+
+    #[tokio::test]
+    async fn test_consent_announcement_with_recording() {
+        let (tx, _rx) = mpsc::channel(10);
+        let mut call = SipCall::new_outbound(
+            "test-call-10".to_string(),
+            "sip-call-10".to_string(),
+            "local@test.com".to_string(),
+            "remote@test.com".to_string(),
+            tx,
+        );
+
+        // Enable recording
+        call.enable_recording();
+
+        // Set consent announcement (path doesn't need to exist for this test)
+        call.set_consent_announcement(Some("/nonexistent/announcement.wav".to_string()));
+
+        // Create and attach a recorder
+        let recorder = Arc::new(RtpRecorder::new(None));
+        call.set_recorder(recorder.clone());
+
+        // Initially not recording
+        assert!(!recorder.is_enabled().await);
+
+        // Note: We can't test actual playback in unit tests without a real WAV file
+        // and RTP session. The integration will be tested in manual verification.
     }
 }
