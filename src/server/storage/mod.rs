@@ -7,11 +7,14 @@
 //! - Storage quota management and tracking
 //! - Automatic directory structure organization (YYYY/MM/DD)
 
+pub mod encryption;
+
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use chrono::{DateTime, Utc};
 use thiserror::Error;
+use encryption::EncryptionContext;
 
 /// Storage-related errors
 #[derive(Error, Debug)]
@@ -27,6 +30,9 @@ pub enum StorageError {
 
     #[error("Encryption error: {0}")]
     Encryption(String),
+
+    #[error("Encryption error: {0}")]
+    EncryptionError(#[from] encryption::EncryptionError),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -85,14 +91,28 @@ pub trait RecordingStorage: Send + Sync {
 pub struct LocalFileStorage {
     base_path: PathBuf,
     max_storage_bytes: u64,
+    encryption_ctx: EncryptionContext,
 }
 
 impl LocalFileStorage {
-    /// Create a new local file storage
-    pub fn new(base_path: impl AsRef<Path>, max_storage_gb: f64) -> Self {
+    /// Create a new local file storage with encryption
+    ///
+    /// # Arguments
+    /// * `base_path` - Base directory for storing recordings
+    /// * `max_storage_gb` - Maximum storage quota in gigabytes
+    /// * `encryption_ctx` - Encryption context for securing recordings
+    ///
+    /// # Returns
+    /// * `Self` - New local file storage instance
+    pub fn new(
+        base_path: impl AsRef<Path>,
+        max_storage_gb: f64,
+        encryption_ctx: EncryptionContext,
+    ) -> Self {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
             max_storage_bytes: (max_storage_gb * 1024.0 * 1024.0 * 1024.0) as u64,
+            encryption_ctx,
         }
     }
 
@@ -193,10 +213,9 @@ impl RecordingStorage for LocalFileStorage {
             fs::create_dir_all(parent).await?;
         }
 
-        // TODO: Encrypt data before writing (will be implemented in subtask 2.2)
-        // For now, store the data as-is
-        let encrypted_data = data;
-        let encryption_key_id = "none".to_string(); // Placeholder until encryption is implemented
+        // Encrypt data before writing
+        let encrypted_data = self.encryption_ctx.encrypt(&data)?;
+        let encryption_key_id = self.encryption_ctx.key_id().to_string();
 
         // Write file
         let mut file = fs::File::create(&absolute_path).await?;
@@ -233,9 +252,8 @@ impl RecordingStorage for LocalFileStorage {
         let mut encrypted_data = Vec::new();
         file.read_to_end(&mut encrypted_data).await?;
 
-        // TODO: Decrypt data before returning (will be implemented in subtask 2.2)
-        // For now, return the data as-is
-        let decrypted_data = encrypted_data;
+        // Decrypt data before returning
+        let decrypted_data = self.encryption_ctx.decrypt(&encrypted_data)?;
 
         tracing::debug!("Retrieved recording from {} ({} bytes)", file_path, decrypted_data.len());
 
@@ -310,7 +328,9 @@ mod tests {
     #[tokio::test]
     async fn test_local_storage_init() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage");
-        let storage = LocalFileStorage::new(&temp_dir, 1.0); // 1GB quota
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx); // 1GB quota
 
         storage.init().await.unwrap();
         assert!(temp_dir.exists());
@@ -322,7 +342,9 @@ mod tests {
     #[tokio::test]
     async fn test_store_and_retrieve_recording() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_2");
-        let storage = LocalFileStorage::new(&temp_dir, 1.0);
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx);
 
         storage.init().await.unwrap();
 
@@ -332,6 +354,7 @@ mod tests {
 
         assert!(result.file_size == test_data.len() as u64);
         assert!(result.file_path.contains("12345"));
+        assert_eq!(result.encryption_key_id, "test-key");
 
         // Retrieve the recording
         let retrieved = storage.get_recording(&result.file_path).await.unwrap();
@@ -344,7 +367,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_recording() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_3");
-        let storage = LocalFileStorage::new(&temp_dir, 1.0);
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx);
 
         storage.init().await.unwrap();
 
@@ -365,8 +390,10 @@ mod tests {
     #[tokio::test]
     async fn test_storage_quota() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_4");
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
         // Very small quota for testing
-        let storage = LocalFileStorage::new(&temp_dir, 0.000001); // ~1KB
+        let storage = LocalFileStorage::new(&temp_dir, 0.000001, encryption_ctx); // ~1KB
 
         storage.init().await.unwrap();
 
@@ -388,7 +415,9 @@ mod tests {
     #[tokio::test]
     async fn test_storage_info() {
         let temp_dir = std::env::temp_dir().join("voip_crm_test_storage_5");
-        let storage = LocalFileStorage::new(&temp_dir, 1.0);
+        let key_hex = encryption::generate_key();
+        let encryption_ctx = encryption::EncryptionContext::from_hex(&key_hex, "test-key").unwrap();
+        let storage = LocalFileStorage::new(&temp_dir, 1.0, encryption_ctx);
 
         storage.init().await.unwrap();
 
@@ -404,7 +433,8 @@ mod tests {
         // Check updated stats
         let info = storage.get_storage_info().await.unwrap();
         assert_eq!(info.total_files, 1);
-        assert_eq!(info.total_size_bytes, test_data.len() as u64);
+        // Note: encrypted size will be larger than plaintext due to nonce and auth tag
+        assert!(info.total_size_bytes > test_data.len() as u64);
 
         // Cleanup
         let _ = std::fs::remove_dir_all(temp_dir);

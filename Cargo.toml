@@ -85,6 +85,9 @@ rand = "0.8"
 # Byte manipulation for RTP packets
 bytes = "1"
 
+# Encryption for call recordings
+aes-gcm = "0.10"
+
 # Network interface detection
 get_if_addrs = "0.5"
 
