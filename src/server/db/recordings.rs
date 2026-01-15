@@ -291,6 +291,28 @@ pub async fn increment_recordings_deleted(pool: &PgPool) -> Result<(), sqlx::Err
     Ok(())
 }
 
+/// Get today's recording statistics (added, deleted)
+/// Returns (recordings_added, recordings_deleted)
+pub async fn get_today_stats(pool: &PgPool) -> Result<(i32, i32), sqlx::Error> {
+    let today = Utc::now().date_naive();
+
+    let result = sqlx::query!(
+        r#"
+        SELECT recordings_added, recordings_deleted
+        FROM storage_usage_log
+        WHERE date = $1
+        "#,
+        today
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match result {
+        Some(row) => Ok((row.recordings_added, row.recordings_deleted)),
+        None => Ok((0, 0)),
+    }
+}
+
 /// Get recent storage usage history
 pub async fn get_usage_history(
     pool: &PgPool,
