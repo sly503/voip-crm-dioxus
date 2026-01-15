@@ -315,6 +315,7 @@ async fn sip_hangup(
 
 async fn get_leads(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Lead>>, StatusCode> {
     db::leads::get_all(&state.db)
         .await
@@ -348,6 +349,7 @@ async fn get_my_leads(
 
 async fn get_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::get_by_id(&state.db, id)
@@ -359,6 +361,7 @@ async fn get_lead(
 
 async fn create_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
     db::leads::create(&state.db, req)
@@ -369,6 +372,7 @@ async fn create_lead(
 
 async fn update_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -380,6 +384,7 @@ async fn update_lead(
 
 async fn delete_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     db::leads::delete(&state.db, id)
@@ -390,6 +395,7 @@ async fn delete_lead(
 
 async fn add_lead_note(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<AddNoteRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -401,6 +407,7 @@ async fn add_lead_note(
 
 async fn update_lead_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<UpdateStatusRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
@@ -418,6 +425,7 @@ struct AssignLeadRequest {
 
 async fn assign_lead(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<AssignLeadRequest>,
 ) -> Result<Json<Lead>, StatusCode> {
