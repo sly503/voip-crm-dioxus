@@ -19,6 +19,9 @@ pub mod email;
 pub mod storage;
 pub mod recordings_api;
 
+#[cfg(test)]
+mod retention_policy_tests;
+
 use axum::{
     routing::{delete, get, post, put},
     Router,
