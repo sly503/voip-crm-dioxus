@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use crate::models::{CallRecording, RecordingSearchParams};
 use crate::api;
 use crate::components::common::LoadingSpinner;
-use crate::state::{show_notification, NotificationType};
+use crate::state::{show_notification, NotificationType, AUTH_STATE};
 
 #[component]
 pub fn RecordingList(
@@ -89,6 +89,9 @@ pub fn RecordingList(
                                         "Disposition"
                                     }
                                     th { class: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider",
+                                        "Status"
+                                    }
+                                    th { class: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider",
                                         "Actions"
                                     }
                                 }
@@ -113,6 +116,8 @@ pub fn RecordingList(
 fn RecordingRow(recording: CallRecording) -> Element {
     let recording_id = recording.id;
     let mut is_deleting = use_signal(|| false);
+    let mut is_updating_hold = use_signal(|| false);
+    let mut compliance_hold = use_signal(|| recording.compliance_hold);
 
     // Extract metadata
     let metadata = recording.metadata.as_ref()
@@ -141,7 +146,7 @@ fn RecordingRow(recording: CallRecording) -> Element {
     let duration_str = format_duration(recording.duration_seconds);
 
     let handle_delete = move |_| {
-        if recording.compliance_hold {
+        if *compliance_hold.read() {
             show_notification("Cannot delete recording with compliance hold", NotificationType::Error);
             return;
         }
@@ -158,6 +163,30 @@ fn RecordingRow(recording: CallRecording) -> Element {
                 }
             }
             is_deleting.set(false);
+        });
+    };
+
+    let handle_toggle_hold = move |_| {
+        let new_hold_status = !*compliance_hold.read();
+        is_updating_hold.set(true);
+        spawn(async move {
+            match api::recordings::update_compliance_hold(recording_id, new_hold_status).await {
+                Ok(updated_recording) => {
+                    compliance_hold.set(updated_recording.compliance_hold);
+                    let status_text = if updated_recording.compliance_hold { "set" } else { "released" };
+                    show_notification(
+                        &format!("Compliance hold {}", status_text),
+                        NotificationType::Success
+                    );
+                }
+                Err(e) => {
+                    show_notification(
+                        &format!("Failed to update compliance hold: {}", e),
+                        NotificationType::Error
+                    );
+                }
+            }
+            is_updating_hold.set(false);
         });
     };
 
@@ -186,6 +215,15 @@ fn RecordingRow(recording: CallRecording) -> Element {
                 }
             }
             td { class: "px-4 py-3 text-sm",
+                if *compliance_hold.read() {
+                    span {
+                        class: "inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800 border border-yellow-300",
+                        title: "Recording is protected from automatic deletion",
+                        "\u{1F512} Compliance Hold"
+                    }
+                }
+            }
+            td { class: "px-4 py-3 text-sm",
                 div { class: "flex gap-2",
                     // Play button
                     a {
@@ -203,20 +241,36 @@ fn RecordingRow(recording: CallRecording) -> Element {
                         title: "Download recording",
                         "\u{2B07}"
                     }
+                    // Compliance hold toggle (supervisor/admin only)
+                    if AUTH_STATE.read().is_supervisor_or_above() {
+                        button {
+                            class: if *compliance_hold.read() {
+                                "text-yellow-600 hover:text-yellow-800 disabled:opacity-50"
+                            } else {
+                                "text-gray-600 hover:text-gray-800 disabled:opacity-50"
+                            },
+                            disabled: *is_updating_hold.read(),
+                            onclick: handle_toggle_hold,
+                            title: if *compliance_hold.read() {
+                                "Release compliance hold"
+                            } else {
+                                "Set compliance hold"
+                            },
+                            if *compliance_hold.read() {
+                                "\u{1F513}" // Unlocked padlock
+                            } else {
+                                "\u{1F512}" // Locked padlock
+                            }
+                        }
+                    }
                     // Delete button
-                    if !recording.compliance_hold {
+                    if !*compliance_hold.read() {
                         button {
                             class: "text-red-600 hover:text-red-800 disabled:opacity-50",
                             disabled: *is_deleting.read(),
                             onclick: handle_delete,
                             title: "Delete recording",
                             "\u{1F5D1}"
-                        }
-                    } else {
-                        span {
-                            class: "text-yellow-600",
-                            title: "Compliance hold - cannot delete",
-                            "\u{1F512}"
                         }
                     }
                 }
