@@ -3,23 +3,23 @@
   "spec": "002-call-recording-and-playback",
   "state": "building",
   "subtasks": {
-    "completed": 13,
+    "completed": 15,
     "total": 39,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "SIP/RTP Recording Integration",
+    "current": "Database Operations & API",
     "id": null,
-    "total": 5
+    "total": 6
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 15,
+    "number": 17,
     "started_at": "2026-01-15T20:19:56.167719"
   },
-  "last_update": "2026-01-15T21:04:37.668378"
+  "last_update": "2026-01-15T21:13:48.465280"
 }

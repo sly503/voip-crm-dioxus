@@ -25,7 +25,7 @@ pub async fn insert_recording(
         VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, false, $8)
         RETURNING id, call_id, file_path, file_size, duration_seconds, format,
                   encryption_key_id, uploaded_at, retention_until, compliance_hold,
-                  metadata, uploaded_at as created_at
+                  metadata, created_at
         "#
     )
     .bind(call_id)
@@ -46,7 +46,7 @@ pub async fn get_recording(pool: &PgPool, id: i64) -> Result<Option<CallRecordin
         r#"
         SELECT id, call_id, file_path, file_size, duration_seconds, format,
                encryption_key_id, uploaded_at, retention_until, compliance_hold,
-               metadata, uploaded_at as created_at
+               metadata, created_at
         FROM call_recordings
         WHERE id = $1
         "#
@@ -74,7 +74,7 @@ pub async fn search_recordings(
         r#"
         SELECT id, call_id, file_path, file_size, duration_seconds, format,
                encryption_key_id, uploaded_at, retention_until, compliance_hold,
-               metadata, uploaded_at as created_at
+               metadata, created_at
         FROM call_recordings
         WHERE 1=1
         "#
