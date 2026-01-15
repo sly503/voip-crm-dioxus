@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
-use crate::models::recording::{CallRecording, CreateRecordingRequest, RecordingSearchParams, UpdateComplianceHoldRequest};
+use crate::models::recording::{CallRecording, CreateRecordingRequest, RecordingSearchParams, UpdateComplianceHoldRequest, RecordingRetentionPolicy, CreateRetentionPolicyRequest};
 use crate::server::{AppState, auth::Claims};
 use crate::server::storage::{RecordingStorage, StorageError};
 
@@ -448,6 +448,192 @@ pub async fn stream_recording(
         })?;
 
     Ok(response)
+}
+
+// ============== Retention Policy Endpoints ==============
+
+/// Get all retention policies
+///
+/// Returns a list of all retention policies, ordered by default status and creation date.
+pub async fn get_retention_policies(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+) -> Result<Json<Vec<RecordingRetentionPolicy>>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to view retention policies
+
+    crate::server::db::recordings::get_all_retention_policies(&state.db)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to get retention policies: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+/// Get a retention policy by ID
+///
+/// Returns the details of a specific retention policy.
+pub async fn get_retention_policy(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to view retention policies
+
+    crate::server::db::recordings::get_retention_policy(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get retention policy {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Create a new retention policy
+///
+/// Creates a new retention policy with the specified parameters.
+/// Validates that campaign/agent IDs are provided when applies_to is Campaign/Agent.
+pub async fn create_retention_policy(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(req): Json<CreateRetentionPolicyRequest>,
+) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to create retention policies
+
+    // Validate request
+    if let Err(e) = validate_retention_policy_request(&req) {
+        tracing::warn!("Invalid retention policy request: {}", e);
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    crate::server::db::recordings::create_retention_policy(&state.db, &req)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to create retention policy: {}", e);
+            // Check for database constraint violations
+            if e.to_string().contains("unique") || e.to_string().contains("constraint") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+/// Update a retention policy
+///
+/// Updates an existing retention policy with new parameters.
+pub async fn update_retention_policy(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+    Json(req): Json<CreateRetentionPolicyRequest>,
+) -> Result<Json<RecordingRetentionPolicy>, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to update retention policies
+
+    // Validate request
+    if let Err(e) = validate_retention_policy_request(&req) {
+        tracing::warn!("Invalid retention policy request: {}", e);
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Verify policy exists
+    crate::server::db::recordings::get_retention_policy(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get retention policy {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    crate::server::db::recordings::update_retention_policy(&state.db, id, &req)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::error!("Failed to update retention policy: {}", e);
+            if e.to_string().contains("unique") || e.to_string().contains("constraint") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })
+}
+
+/// Delete a retention policy
+///
+/// Deletes a retention policy. Default policies cannot be deleted if they are the only default.
+pub async fn delete_retention_policy_handler(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    // TODO: Permission check will be added in subtask 4.6
+    // Only Supervisors/Admins should be able to delete retention policies
+
+    // Verify policy exists
+    let policy = crate::server::db::recordings::get_retention_policy(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get retention policy {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Warn if deleting the default policy
+    if policy.is_default {
+        tracing::warn!("Deleting default retention policy {}", id);
+    }
+
+    crate::server::db::recordings::delete_retention_policy(&state.db, id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete retention policy: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Validate retention policy request
+fn validate_retention_policy_request(req: &CreateRetentionPolicyRequest) -> Result<(), String> {
+    use crate::models::recording::RetentionAppliesTo;
+
+    // Validate retention days is positive
+    if req.retention_days <= 0 {
+        return Err("retention_days must be positive".to_string());
+    }
+
+    // Validate applies_to and corresponding IDs
+    match req.applies_to {
+        RetentionAppliesTo::Campaign => {
+            if req.campaign_id.is_none() {
+                return Err("campaign_id required when applies_to is Campaign".to_string());
+            }
+            if req.agent_id.is_some() {
+                return Err("agent_id must be null when applies_to is Campaign".to_string());
+            }
+        }
+        RetentionAppliesTo::Agent => {
+            if req.agent_id.is_none() {
+                return Err("agent_id required when applies_to is Agent".to_string());
+            }
+            if req.campaign_id.is_some() {
+                return Err("campaign_id must be null when applies_to is Agent".to_string());
+            }
+        }
+        RetentionAppliesTo::All => {
+            if req.campaign_id.is_some() || req.agent_id.is_some() {
+                return Err("campaign_id and agent_id must be null when applies_to is All".to_string());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

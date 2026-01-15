@@ -144,6 +144,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/recordings/{id}/download", get(recordings_api::download_recording))
         .route("/api/recordings/{id}/stream", get(recordings_api::stream_recording))
 
+        // Retention policy routes
+        .route("/api/retention-policies", get(recordings_api::get_retention_policies).post(recordings_api::create_retention_policy))
+        .route("/api/retention-policies/{id}", get(recordings_api::get_retention_policy).put(recordings_api::update_retention_policy).delete(recordings_api::delete_retention_policy_handler))
+
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(Arc::new(state))

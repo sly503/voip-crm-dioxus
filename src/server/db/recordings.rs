@@ -2,7 +2,7 @@
 
 use sqlx::PgPool;
 use chrono::{NaiveDate, Utc};
-use crate::models::recording::{CallRecording, StorageUsage, RecordingSearchParams};
+use crate::models::recording::{CallRecording, StorageUsage, RecordingSearchParams, RecordingRetentionPolicy, CreateRetentionPolicyRequest};
 
 /// Insert a new call recording
 pub async fn insert_recording(
@@ -322,6 +322,141 @@ pub async fn get_total_storage_stats(pool: &PgPool) -> Result<(i64, i64), sqlx::
     .await?;
 
     Ok((result.count, result.total_size))
+}
+
+// Retention Policy Functions
+
+/// Get all retention policies
+pub async fn get_all_retention_policies(pool: &PgPool) -> Result<Vec<RecordingRetentionPolicy>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        SELECT id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        FROM recording_retention_policies
+        ORDER BY is_default DESC, created_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Get a retention policy by ID
+pub async fn get_retention_policy(pool: &PgPool, id: i64) -> Result<Option<RecordingRetentionPolicy>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        SELECT id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        FROM recording_retention_policies
+        WHERE id = $1
+        "#
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Create a new retention policy
+pub async fn create_retention_policy(
+    pool: &PgPool,
+    req: &CreateRetentionPolicyRequest,
+) -> Result<RecordingRetentionPolicy, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        INSERT INTO recording_retention_policies (name, retention_days, applies_to, campaign_id, agent_id, is_default)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        "#
+    )
+    .bind(&req.name)
+    .bind(req.retention_days)
+    .bind(&req.applies_to)
+    .bind(req.campaign_id)
+    .bind(req.agent_id)
+    .bind(req.is_default)
+    .fetch_one(pool)
+    .await
+}
+
+/// Update a retention policy
+pub async fn update_retention_policy(
+    pool: &PgPool,
+    id: i64,
+    req: &CreateRetentionPolicyRequest,
+) -> Result<RecordingRetentionPolicy, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        UPDATE recording_retention_policies
+        SET name = $2,
+            retention_days = $3,
+            applies_to = $4,
+            campaign_id = $5,
+            agent_id = $6,
+            is_default = $7,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        "#
+    )
+    .bind(id)
+    .bind(&req.name)
+    .bind(req.retention_days)
+    .bind(&req.applies_to)
+    .bind(req.campaign_id)
+    .bind(req.agent_id)
+    .bind(req.is_default)
+    .fetch_one(pool)
+    .await
+}
+
+/// Delete a retention policy
+pub async fn delete_retention_policy(pool: &PgPool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM recording_retention_policies WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Get the default retention policy
+pub async fn get_default_retention_policy(pool: &PgPool) -> Result<Option<RecordingRetentionPolicy>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        SELECT id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        FROM recording_retention_policies
+        WHERE is_default = true
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+/// Get retention policy for a specific campaign
+pub async fn get_campaign_retention_policy(pool: &PgPool, campaign_id: i64) -> Result<Option<RecordingRetentionPolicy>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        SELECT id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        FROM recording_retention_policies
+        WHERE applies_to = 'Campaign' AND campaign_id = $1
+        LIMIT 1
+        "#
+    )
+    .bind(campaign_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Get retention policy for a specific agent
+pub async fn get_agent_retention_policy(pool: &PgPool, agent_id: i64) -> Result<Option<RecordingRetentionPolicy>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRetentionPolicy>(
+        r#"
+        SELECT id, name, retention_days, applies_to, campaign_id, agent_id, is_default, created_at, updated_at
+        FROM recording_retention_policies
+        WHERE applies_to = 'Agent' AND agent_id = $1
+        LIMIT 1
+        "#
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
 }
 
 #[cfg(test)]
