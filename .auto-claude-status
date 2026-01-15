@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "001-user-registration-flow",
+  "spec": "001-api-authentication-protection",
   "state": "building",
   "subtasks": {
-    "completed": 25,
-    "total": 27,
+    "completed": 0,
+    "total": 0,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Testing and Validation",
-    "id": null,
-    "total": 3
+    "current": "",
+    "id": 0,
+    "total": 0
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 27,
-    "started_at": "2026-01-14T14:44:37.255924"
+    "number": 4,
+    "started_at": "2026-01-15T16:29:50.477268"
   },
-  "last_update": "2026-01-14T15:46:39.779647"
+  "last_update": "2026-01-15T16:37:47.068966"
 }

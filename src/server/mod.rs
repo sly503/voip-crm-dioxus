@@ -498,6 +498,7 @@ async fn update_agent_status(
 
 async fn get_campaigns(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Result<Json<Vec<Campaign>>, StatusCode> {
     db::campaigns::get_all(&state.db)
         .await
@@ -507,6 +508,7 @@ async fn get_campaigns(
 
 async fn get_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::get_by_id(&state.db, id)
@@ -518,6 +520,7 @@ async fn get_campaign(
 
 async fn create_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::create(&state.db, req)
@@ -528,6 +531,7 @@ async fn create_campaign(
 
 async fn update_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<CreateCampaignRequest>,
 ) -> Result<Json<Campaign>, StatusCode> {
@@ -539,6 +543,7 @@ async fn update_campaign(
 
 async fn start_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Active)
@@ -549,6 +554,7 @@ async fn start_campaign(
 
 async fn pause_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Paused)
@@ -559,6 +565,7 @@ async fn pause_campaign(
 
 async fn stop_campaign(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Campaign>, StatusCode> {
     db::campaigns::update_status(&state.db, id, CampaignStatus::Completed)
