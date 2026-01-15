@@ -1053,6 +1053,7 @@ struct AutomationStatus {
 
 async fn start_campaign_automation(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     // Start the campaign automation
@@ -1074,6 +1075,7 @@ async fn start_campaign_automation(
 
 async fn stop_campaign_automation(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     state.automation.stop_campaign(campaign_id)
@@ -1089,6 +1091,7 @@ async fn stop_campaign_automation(
 
 async fn get_automation_status(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
     axum::extract::Path(campaign_id): axum::extract::Path<i64>,
 ) -> Json<AutomationStatus> {
     if let Some(status) = state.automation.get_status(campaign_id).await {
