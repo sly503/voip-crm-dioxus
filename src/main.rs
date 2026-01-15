@@ -216,7 +216,6 @@ fn Sidebar(is_supervisor: bool) -> Element {
             (Route::Leads {}, "Leads", "\u{1F4CB}"),
             (Route::Campaigns {}, "Campaigns", "\u{1F4E2}"),
             (Route::Agents {}, "Agents", "\u{1F465}"),
-            (Route::Recordings {}, "Recordings", "\u{1F3A4}"),
             (Route::AISettings {}, "AI Settings", "\u{1F916}"),
         ]
     } else {

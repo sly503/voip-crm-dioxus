@@ -8,9 +8,7 @@ pub async fn get_all(pool: &PgPool) -> Result<Vec<Campaign>, sqlx::Error> {
         r#"
         SELECT id, name, description, status, dialer_mode, caller_id,
                start_time, end_time, max_attempts, retry_delay_minutes,
-               total_leads, dialed_leads, connected_leads,
-               consent_announcement, recording_enabled,
-               created_at, updated_at
+               total_leads, dialed_leads, connected_leads, created_at, updated_at
         FROM campaigns
         ORDER BY created_at DESC
         "#
@@ -24,9 +22,7 @@ pub async fn get_by_id(pool: &PgPool, id: i64) -> Result<Option<Campaign>, sqlx:
         r#"
         SELECT id, name, description, status, dialer_mode, caller_id,
                start_time, end_time, max_attempts, retry_delay_minutes,
-               total_leads, dialed_leads, connected_leads,
-               consent_announcement, recording_enabled,
-               created_at, updated_at
+               total_leads, dialed_leads, connected_leads, created_at, updated_at
         FROM campaigns
         WHERE id = $1
         "#
@@ -41,9 +37,7 @@ pub async fn get_active(pool: &PgPool) -> Result<Vec<Campaign>, sqlx::Error> {
         r#"
         SELECT id, name, description, status, dialer_mode, caller_id,
                start_time, end_time, max_attempts, retry_delay_minutes,
-               total_leads, dialed_leads, connected_leads,
-               consent_announcement, recording_enabled,
-               created_at, updated_at
+               total_leads, dialed_leads, connected_leads, created_at, updated_at
         FROM campaigns
         WHERE status = 'Active'
         ORDER BY created_at DESC
@@ -56,14 +50,11 @@ pub async fn get_active(pool: &PgPool) -> Result<Vec<Campaign>, sqlx::Error> {
 pub async fn create(pool: &PgPool, req: CreateCampaignRequest) -> Result<Campaign, sqlx::Error> {
     sqlx::query_as::<_, Campaign>(
         r#"
-        INSERT INTO campaigns (name, description, dialer_mode, caller_id, max_attempts, retry_delay_minutes,
-                               consent_announcement, recording_enabled, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Draft')
+        INSERT INTO campaigns (name, description, dialer_mode, caller_id, max_attempts, retry_delay_minutes, status)
+        VALUES ($1, $2, $3, $4, $5, $6, 'Draft')
         RETURNING id, name, description, status, dialer_mode, caller_id,
                   start_time, end_time, max_attempts, retry_delay_minutes,
-                  total_leads, dialed_leads, connected_leads,
-                  consent_announcement, recording_enabled,
-                  created_at, updated_at
+                  total_leads, dialed_leads, connected_leads, created_at, updated_at
         "#
     )
     .bind(&req.name)
@@ -72,8 +63,6 @@ pub async fn create(pool: &PgPool, req: CreateCampaignRequest) -> Result<Campaig
     .bind(&req.caller_id)
     .bind(req.max_attempts.unwrap_or(3))
     .bind(req.retry_delay_minutes.unwrap_or(30))
-    .bind(&req.consent_announcement)
-    .bind(req.recording_enabled.unwrap_or(true))
     .fetch_one(pool)
     .await
 }
@@ -84,14 +73,11 @@ pub async fn update(pool: &PgPool, id: i64, req: CreateCampaignRequest) -> Resul
         UPDATE campaigns
         SET name = $2, description = $3, dialer_mode = $4,
             caller_id = $5, max_attempts = $6, retry_delay_minutes = $7,
-            consent_announcement = $8, recording_enabled = $9,
             updated_at = NOW()
         WHERE id = $1
         RETURNING id, name, description, status, dialer_mode, caller_id,
                   start_time, end_time, max_attempts, retry_delay_minutes,
-                  total_leads, dialed_leads, connected_leads,
-                  consent_announcement, recording_enabled,
-                  created_at, updated_at
+                  total_leads, dialed_leads, connected_leads, created_at, updated_at
         "#
     )
     .bind(id)
@@ -101,8 +87,6 @@ pub async fn update(pool: &PgPool, id: i64, req: CreateCampaignRequest) -> Resul
     .bind(&req.caller_id)
     .bind(req.max_attempts.unwrap_or(3))
     .bind(req.retry_delay_minutes.unwrap_or(30))
-    .bind(&req.consent_announcement)
-    .bind(req.recording_enabled.unwrap_or(true))
     .fetch_one(pool)
     .await
 }
@@ -115,9 +99,7 @@ pub async fn update_status(pool: &PgPool, id: i64, status: CampaignStatus) -> Re
         WHERE id = $1
         RETURNING id, name, description, status, dialer_mode, caller_id,
                   start_time, end_time, max_attempts, retry_delay_minutes,
-                  total_leads, dialed_leads, connected_leads,
-                  consent_announcement, recording_enabled,
-                  created_at, updated_at
+                  total_leads, dialed_leads, connected_leads, created_at, updated_at
         "#
     )
     .bind(id)

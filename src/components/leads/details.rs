@@ -1,10 +1,8 @@
 use dioxus::prelude::*;
-use crate::models::{Lead, LeadStatus, Call, CallRecording};
-use crate::models::recording::RecordingSearchParams;
+use crate::models::{Lead, LeadStatus};
 use crate::api;
 use crate::state::UI_STATE;
 use crate::components::common::LoadingSpinner;
-use crate::components::recordings::AudioPlayer;
 
 #[component]
 pub fn LeadDetails() -> Element {
@@ -23,35 +21,14 @@ pub fn LeadDetails() -> Element {
     let mut is_loading = use_signal(|| true);
     let mut new_note = use_signal(String::new);
     let mut is_adding_note = use_signal(|| false);
-    let mut calls = use_signal(|| Vec::<Call>::new());
-    let mut recordings = use_signal(|| Vec::<CallRecording>::new());
-    let mut selected_recording_id = use_signal(|| None::<i64>);
-    let mut show_player_modal = use_signal(|| false);
 
-    // Fetch lead details, calls, and recordings
+    // Fetch lead details
     use_effect(move || {
         spawn(async move {
             is_loading.set(true);
-
-            // Fetch lead
             if let Ok(data) = api::leads::get_lead(lead_id).await {
                 lead.set(Some(data));
             }
-
-            // Fetch calls for this lead
-            if let Ok(call_data) = api::calls::get_lead_calls(lead_id).await {
-                calls.set(call_data);
-            }
-
-            // Fetch recordings for this lead
-            let search_params = RecordingSearchParams {
-                lead_id: Some(lead_id),
-                ..Default::default()
-            };
-            if let Ok(recording_data) = api::recordings::search_recordings(search_params).await {
-                recordings.set(recording_data);
-            }
-
             is_loading.set(false);
         });
     });
@@ -145,49 +122,21 @@ pub fn LeadDetails() -> Element {
 
                 // Call history
                 div { class: "bg-gray-50 rounded-lg p-4 mb-4",
-                    h3 { class: "font-medium mb-3", "Call History ({calls.read().len()})" }
-                    if calls.read().is_empty() {
-                        p { class: "text-gray-500 text-sm text-center py-4",
-                            "No calls yet"
+                    h3 { class: "font-medium mb-3", "Call History" }
+                    div { class: "space-y-2 text-sm",
+                        div { class: "flex justify-between",
+                            span { class: "text-gray-500", "Call Attempts:" }
+                            span { "{lead_data.call_attempts}" }
                         }
-                    } else {
-                        div { class: "space-y-2",
-                            for call in calls.read().iter() {
-                                CallHistoryRow {
-                                    key: "{call.id}",
-                                    call: call.clone(),
-                                    recording: recordings.read().iter().find(|r| r.call_id == call.id).cloned(),
-                                    on_play: move |recording_id| {
-                                        selected_recording_id.set(Some(recording_id));
-                                        show_player_modal.set(true);
-                                    }
-                                }
+                        if let Some(last_call) = &last_call_str {
+                            div { class: "flex justify-between",
+                                span { class: "text-gray-500", "Last Call:" }
+                                span { "{last_call}" }
                             }
                         }
-                    }
-                }
-
-                // Recording player modal
-                if *show_player_modal.read() {
-                    if let Some(recording_id) = *selected_recording_id.read() {
-                        div {
-                            class: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50",
-                            onclick: move |_| show_player_modal.set(false),
-                            div {
-                                class: "bg-white rounded-lg p-6 max-w-2xl w-full mx-4",
-                                onclick: move |e| e.stop_propagation(),
-                                div { class: "flex items-center justify-between mb-4",
-                                    h3 { class: "text-lg font-semibold", "Recording Playback" }
-                                    button {
-                                        class: "text-gray-500 hover:text-gray-700 text-2xl",
-                                        onclick: move |_| show_player_modal.set(false),
-                                        "\u{2715}"
-                                    }
-                                }
-                                AudioPlayer {
-                                    recording_id: recording_id
-                                }
-                            }
+                        div { class: "flex justify-between",
+                            span { class: "text-gray-500", "Created:" }
+                            span { "{created_at_str}" }
                         }
                     }
                 }
@@ -278,74 +227,6 @@ fn StatusButton(lead_id: i64, status: LeadStatus, current: LeadStatus) -> Elemen
             disabled: is_current || *is_updating.read(),
             onclick: update_status,
             "{status.display_name()}"
-        }
-    }
-}
-
-#[component]
-fn CallHistoryRow(
-    call: Call,
-    recording: Option<CallRecording>,
-    on_play: EventHandler<i64>,
-) -> Element {
-    // Format duration
-    let duration_str = if let Some(duration) = call.duration_seconds {
-        let mins = duration / 60;
-        let secs = duration % 60;
-        format!("{}:{:02}", mins, secs)
-    } else {
-        "-".to_string()
-    };
-
-    // Format date
-    let date_str = call.started_at
-        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "-".to_string());
-
-    // Get status badge color
-    let status_color = match call.status {
-        crate::models::CallStatus::Completed => "bg-green-100 text-green-800",
-        crate::models::CallStatus::NoAnswer | crate::models::CallStatus::Busy => "bg-yellow-100 text-yellow-800",
-        crate::models::CallStatus::Failed => "bg-red-100 text-red-800",
-        _ => "bg-blue-100 text-blue-800",
-    };
-
-    rsx! {
-        div { class: "bg-white rounded border p-3 hover:shadow-sm transition-shadow",
-            div { class: "flex items-center justify-between",
-                div { class: "flex-1 space-y-1",
-                    div { class: "flex items-center gap-2",
-                        span { class: "text-xs px-2 py-0.5 rounded-full {status_color}",
-                            "{call.status.display_name()}"
-                        }
-                        if let Some(disposition) = &call.disposition {
-                            span { class: "text-xs text-gray-500",
-                                " • {disposition}"
-                            }
-                        }
-                    }
-                    div { class: "text-sm text-gray-600",
-                        span { "\u{1F4C5} {date_str}" }
-                        span { class: "mx-2", "•" }
-                        span { "\u{23F1} {duration_str}" }
-                    }
-                }
-
-                // Recording play button
-                if let Some(rec) = recording {
-                    button {
-                        class: "flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors",
-                        onclick: move |_| on_play.call(rec.id),
-                        title: "Play recording",
-                        span { class: "text-base", "\u{25B6}" }
-                        span { "Play" }
-                    }
-                } else {
-                    span { class: "text-xs text-gray-400 px-3",
-                        "No recording"
-                    }
-                }
-            }
         }
     }
 }

@@ -425,9 +425,6 @@ impl SipUserAgent {
         );
         call.set_rtp_session(Arc::new(rtp_session));
 
-        // Enable recording for all calls
-        call.enable_recording();
-
         // Store call
         let call = Arc::new(RwLock::new(call));
         self.calls.write().await.insert(call_id.clone(), call.clone());

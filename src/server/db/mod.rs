@@ -8,7 +8,6 @@ pub mod users;
 pub mod stats;
 pub mod ai;
 pub mod invitations;
-pub mod recordings;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;

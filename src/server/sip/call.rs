@@ -6,9 +6,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use chrono::{DateTime, Utc};
 
-use super::rtp::{RtpSession, AudioFrame, RtpRecorder};
-use super::audio_mixer::{AudioMixer, MixMode};
-use super::audio_converter::AudioConverter;
+use super::rtp::{RtpSession, AudioFrame};
 use super::SipError;
 
 /// Call direction
@@ -95,12 +93,6 @@ pub struct SipCall {
     /// Dialog state (for rsipstack integration)
     #[allow(dead_code)]
     dialog_id: Option<String>,
-    /// RTP recorder for call recording (if enabled)
-    recorder: Option<Arc<RtpRecorder>>,
-    /// Recording enabled flag
-    recording_enabled: bool,
-    /// Consent announcement file path (WAV file to play before recording)
-    consent_announcement_path: Option<String>,
 }
 
 impl SipCall {
@@ -125,9 +117,6 @@ impl SipCall {
             ended_at: RwLock::new(None),
             event_tx,
             dialog_id: None,
-            recorder: None,
-            recording_enabled: false,
-            consent_announcement_path: None,
         }
     }
 
@@ -152,9 +141,6 @@ impl SipCall {
             ended_at: RwLock::new(None),
             event_tx,
             dialog_id: None,
-            recorder: None,
-            recording_enabled: false,
-            consent_announcement_path: None,
         }
     }
 
@@ -175,25 +161,6 @@ impl SipCall {
         // Record connect time when transitioning to Active
         if state == CallState::Active && *current != CallState::Active {
             *self.connected_at.write().await = Some(Utc::now());
-
-            // Play consent announcement and start recording when call becomes active
-            if self.recording_enabled {
-                // Play consent announcement first (if configured)
-                match self.play_consent_announcement().await {
-                    Ok(played) => {
-                        if played {
-                            tracing::info!("Consent announcement played, starting recording for call {}", self.call_id);
-                        }
-                        // Start recording after announcement (or immediately if no announcement)
-                        if let Err(e) = self.start_recording().await {
-                            tracing::error!("Failed to start recording: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to play consent announcement: {}. Recording will not start.", e);
-                    }
-                }
-            }
         }
 
         // Record end time when transitioning to Ended/Failed
@@ -202,13 +169,6 @@ impl SipCall {
             && *current != CallState::Failed
         {
             *self.ended_at.write().await = Some(Utc::now());
-
-            // Stop recording when call ends
-            if self.recording_enabled {
-                if let Err(e) = self.stop_recording().await {
-                    tracing::error!("Failed to stop recording: {}", e);
-                }
-            }
         }
 
         *current = state;
@@ -218,18 +178,7 @@ impl SipCall {
     }
 
     /// Set the RTP session
-    /// If recording is enabled, the recorder will be extracted from the RTP session
     pub fn set_rtp_session(&mut self, session: Arc<RtpSession>) {
-        // If recording is enabled, get the recorder from the RTP session
-        if self.recording_enabled {
-            if let Some(recorder) = session.recorder() {
-                self.recorder = Some(recorder.clone());
-                tracing::debug!("Recorder attached to call {}", self.call_id);
-            } else {
-                tracing::warn!("Recording enabled but RTP session has no recorder for call {}", self.call_id);
-            }
-        }
-
         self.rtp_session = Some(session);
     }
 
@@ -290,163 +239,6 @@ impl SipCall {
     pub async fn on_dtmf_received(&self, digit: char) {
         let _ = self.event_tx.send(CallEvent::DtmfReceived(digit)).await;
     }
-
-    /// Enable recording for this call
-    /// Must be called before RTP session is created to enable recording
-    pub fn enable_recording(&mut self) {
-        self.recording_enabled = true;
-        tracing::info!("Recording enabled for call {}", self.call_id);
-    }
-
-    /// Check if recording is enabled
-    pub fn is_recording_enabled(&self) -> bool {
-        self.recording_enabled
-    }
-
-    /// Set the consent announcement file path
-    /// The file should be a WAV file that will be played before recording starts
-    pub fn set_consent_announcement(&mut self, file_path: Option<String>) {
-        self.consent_announcement_path = file_path;
-    }
-
-    /// Play the consent announcement to the remote party
-    /// Returns true if announcement was played, false if no announcement configured
-    async fn play_consent_announcement(&self) -> Result<bool, SipError> {
-        // Check if consent announcement is configured
-        let announcement_path = match &self.consent_announcement_path {
-            Some(path) => path,
-            None => {
-                tracing::debug!("No consent announcement configured for call {}", self.call_id);
-                return Ok(false);
-            }
-        };
-
-        tracing::info!("Playing consent announcement for call {}: {}", self.call_id, announcement_path);
-
-        // Load the WAV file
-        let (samples, sample_rate, channels) = AudioConverter::load_wav_file(announcement_path).await?;
-
-        tracing::debug!(
-            "Loaded consent announcement: {} samples, {} Hz, {} channels",
-            samples.len(),
-            sample_rate,
-            channels
-        );
-
-        // Convert stereo to mono if needed (mix both channels)
-        let mono_samples = if channels == 2 {
-            // Convert stereo to mono by averaging left and right channels
-            samples
-                .chunks_exact(2)
-                .map(|chunk| {
-                    let left = chunk[0] as i32;
-                    let right = chunk[1] as i32;
-                    ((left + right) / 2) as i16
-                })
-                .collect::<Vec<i16>>()
-        } else {
-            samples
-        };
-
-        // Resample if needed (simple approach: only support 8kHz for now)
-        if sample_rate != 8000 {
-            tracing::warn!(
-                "Consent announcement has sample rate {} Hz, but 8kHz is required. Audio may sound incorrect.",
-                sample_rate
-            );
-        }
-
-        // Send audio in chunks (20ms = 160 samples at 8kHz)
-        const CHUNK_SIZE: usize = 160;
-        for chunk in mono_samples.chunks(CHUNK_SIZE) {
-            self.send_audio(chunk).await?;
-
-            // Wait 20ms between chunks to maintain real-time playback
-            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-        }
-
-        tracing::info!("Consent announcement playback completed for call {}", self.call_id);
-        Ok(true)
-    }
-
-    /// Start recording RTP packets
-    async fn start_recording(&self) -> Result<(), SipError> {
-        if let Some(ref recorder) = self.recorder {
-            recorder.start().await;
-            tracing::info!("Recording started for call {}", self.call_id);
-            Ok(())
-        } else {
-            Err(SipError::InvalidState("No recorder available".to_string()))
-        }
-    }
-
-    /// Stop recording RTP packets
-    async fn stop_recording(&self) -> Result<(), SipError> {
-        if let Some(ref recorder) = self.recorder {
-            recorder.stop().await;
-            tracing::info!("Recording stopped for call {}", self.call_id);
-            Ok(())
-        } else {
-            Err(SipError::InvalidState("No recorder available".to_string()))
-        }
-    }
-
-    /// Finalize the recording and return the WAV data
-    /// This should be called after the call ends to process the recorded audio
-    ///
-    /// # Returns
-    /// * `Ok(Some(Vec<u8>))` - WAV file data if recording was successful
-    /// * `Ok(None)` - No recording available (recording not enabled or no packets captured)
-    /// * `Err(SipError)` - Error processing the recording
-    pub async fn finalize_recording(&self) -> Result<Option<Vec<u8>>, SipError> {
-        // Check if recording is enabled
-        if !self.recording_enabled {
-            return Ok(None);
-        }
-
-        // Get the recorder
-        let recorder = match &self.recorder {
-            Some(rec) => rec,
-            None => return Ok(None),
-        };
-
-        // Drain captured packets
-        let packets = recorder.drain_packets().await;
-        if packets.is_empty() {
-            tracing::warn!("No RTP packets captured for call {}", self.call_id);
-            return Ok(None);
-        }
-
-        tracing::info!("Processing {} RTP packets for call {}", packets.len(), self.call_id);
-
-        // Mix audio packets (stereo mode: agent on left, customer on right)
-        let mixer = AudioMixer::new(MixMode::Stereo, Some(8000));
-        let pcm_samples = mixer.mix_packets(&packets);
-
-        if pcm_samples.is_empty() {
-            tracing::warn!("No audio samples after mixing for call {}", self.call_id);
-            return Ok(None);
-        }
-
-        tracing::info!("Mixed {} PCM samples for call {}", pcm_samples.len(), self.call_id);
-
-        // Convert to WAV format (stereo, 8kHz)
-        let wav_data = AudioConverter::pcm_to_wav(&pcm_samples, 8000, 2)?;
-
-        tracing::info!(
-            "Recording finalized for call {}: {} bytes WAV",
-            self.call_id,
-            wav_data.len()
-        );
-
-        Ok(Some(wav_data))
-    }
-
-    /// Set the RTP recorder reference
-    /// This should be called after enabling recording on the RTP session
-    pub(crate) fn set_recorder(&mut self, recorder: Arc<RtpRecorder>) {
-        self.recorder = Some(recorder);
-    }
 }
 
 /// Generate DTMF tone samples
@@ -496,247 +288,4 @@ pub struct CallStats {
     pub duration_seconds: u64,
     pub packets_sent: u64,
     pub packets_received: u64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_recording_enabled_flag() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-1".to_string(),
-            "sip-call-1".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Initially recording should be disabled
-        assert!(!call.is_recording_enabled());
-
-        // Enable recording
-        call.enable_recording();
-        assert!(call.is_recording_enabled());
-    }
-
-    #[tokio::test]
-    async fn test_recording_lifecycle_without_recorder() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-2".to_string(),
-            "sip-call-2".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording
-        call.enable_recording();
-
-        // Try to finalize recording without a recorder (should return None)
-        let result = call.finalize_recording().await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_recording_lifecycle_with_recorder() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-3".to_string(),
-            "sip-call-3".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording
-        call.enable_recording();
-
-        // Create and attach a recorder
-        let recorder = Arc::new(RtpRecorder::new(None));
-        call.set_recorder(recorder.clone());
-
-        // Start recording manually
-        let start_result = call.start_recording().await;
-        assert!(start_result.is_ok());
-        assert!(recorder.is_enabled().await);
-
-        // Stop recording manually
-        let stop_result = call.stop_recording().await;
-        assert!(stop_result.is_ok());
-        assert!(!recorder.is_enabled().await);
-    }
-
-    #[tokio::test]
-    async fn test_recording_starts_on_active_state() {
-        let (tx, mut rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-4".to_string(),
-            "sip-call-4".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording and attach recorder
-        call.enable_recording();
-        let recorder = Arc::new(RtpRecorder::new(None));
-        call.set_recorder(recorder.clone());
-
-        // Initially not recording
-        assert!(!recorder.is_enabled().await);
-
-        // Transition to Active state - should start recording
-        call.set_state(CallState::Active).await;
-        assert!(recorder.is_enabled().await);
-
-        // Verify state change event was sent
-        let event = rx.recv().await;
-        assert!(matches!(event, Some(CallEvent::StateChanged(CallState::Active))));
-    }
-
-    #[tokio::test]
-    async fn test_recording_stops_on_ended_state() {
-        let (tx, mut rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-5".to_string(),
-            "sip-call-5".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording and attach recorder
-        call.enable_recording();
-        let recorder = Arc::new(RtpRecorder::new(None));
-        call.set_recorder(recorder.clone());
-
-        // Start recording
-        call.set_state(CallState::Active).await;
-        assert!(recorder.is_enabled().await);
-
-        // Clear the Active event
-        rx.recv().await;
-
-        // Transition to Ended state - should stop recording
-        call.set_state(CallState::Ended).await;
-        assert!(!recorder.is_enabled().await);
-
-        // Verify state change event was sent
-        let event = rx.recv().await;
-        assert!(matches!(event, Some(CallEvent::StateChanged(CallState::Ended))));
-    }
-
-    #[tokio::test]
-    async fn test_finalize_recording_without_enabled() {
-        let (tx, _rx) = mpsc::channel(10);
-        let call = SipCall::new_outbound(
-            "test-call-6".to_string(),
-            "sip-call-6".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Recording not enabled - should return None
-        let result = call.finalize_recording().await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_finalize_recording_with_empty_packets() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-7".to_string(),
-            "sip-call-7".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording and attach recorder
-        call.enable_recording();
-        let recorder = Arc::new(RtpRecorder::new(None));
-        call.set_recorder(recorder.clone());
-
-        // Finalize without any packets - should return None
-        let result = call.finalize_recording().await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_set_consent_announcement() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-8".to_string(),
-            "sip-call-8".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Initially no announcement
-        assert!(call.consent_announcement_path.is_none());
-
-        // Set announcement path
-        call.set_consent_announcement(Some("/path/to/announcement.wav".to_string()));
-        assert_eq!(
-            call.consent_announcement_path,
-            Some("/path/to/announcement.wav".to_string())
-        );
-
-        // Clear announcement
-        call.set_consent_announcement(None);
-        assert!(call.consent_announcement_path.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_play_consent_announcement_not_configured() {
-        let (tx, _rx) = mpsc::channel(10);
-        let call = SipCall::new_outbound(
-            "test-call-9".to_string(),
-            "sip-call-9".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Try to play without announcement configured
-        let result = call.play_consent_announcement().await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false); // Should return false (not played)
-    }
-
-    #[tokio::test]
-    async fn test_consent_announcement_with_recording() {
-        let (tx, _rx) = mpsc::channel(10);
-        let mut call = SipCall::new_outbound(
-            "test-call-10".to_string(),
-            "sip-call-10".to_string(),
-            "local@test.com".to_string(),
-            "remote@test.com".to_string(),
-            tx,
-        );
-
-        // Enable recording
-        call.enable_recording();
-
-        // Set consent announcement (path doesn't need to exist for this test)
-        call.set_consent_announcement(Some("/nonexistent/announcement.wav".to_string()));
-
-        // Create and attach a recorder
-        let recorder = Arc::new(RtpRecorder::new(None));
-        call.set_recorder(recorder.clone());
-
-        // Initially not recording
-        assert!(!recorder.is_enabled().await);
-
-        // Note: We can't test actual playback in unit tests without a real WAV file
-        // and RTP session. The integration will be tested in manual verification.
-    }
 }

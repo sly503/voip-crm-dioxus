@@ -1,25 +1,25 @@
 {
   "active": true,
-  "spec": "002-call-recording-and-playback",
+  "spec": "001-api-authentication-protection",
   "state": "building",
   "subtasks": {
-    "completed": 37,
-    "total": 39,
+    "completed": 0,
+    "total": 0,
     "in_progress": 1,
     "failed": 0
   },
   "phase": {
-    "current": "Testing & Documentation",
-    "id": null,
-    "total": 6
+    "current": "",
+    "id": 0,
+    "total": 0
   },
   "workers": {
     "active": 0,
     "max": 1
   },
   "session": {
-    "number": 39,
-    "started_at": "2026-01-15T20:19:56.167719"
+    "number": 18,
+    "started_at": "2026-01-15T16:29:50.477268"
   },
-  "last_update": "2026-01-15T22:35:23.374399"
+  "last_update": "2026-01-15T17:23:58.845888"
 }

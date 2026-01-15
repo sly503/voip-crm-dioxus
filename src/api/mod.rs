@@ -7,7 +7,6 @@ pub mod campaigns;
 pub mod config;
 pub mod ai;
 pub mod sip;
-pub mod recordings;
 
 pub use client::*;
 #[cfg(target_arch = "wasm32")]

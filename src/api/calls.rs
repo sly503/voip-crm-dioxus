@@ -29,8 +29,3 @@ pub async fn dial_direct(phone_number: &str, agent_id: Option<i64>) -> Result<Di
 pub async fn get_call_status(call_id: i64) -> Result<Call, ApiError> {
     api_client().get(&format!("/api/calls/{}", call_id)).await
 }
-
-#[cfg(target_arch = "wasm32")]
-pub async fn get_lead_calls(lead_id: i64) -> Result<Vec<Call>, ApiError> {
-    api_client().get(&format!("/api/leads/{}/calls", lead_id)).await
-}
