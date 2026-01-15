@@ -155,6 +155,7 @@ struct WebRTCConfig {
 
 async fn get_webrtc_config(
     State(state): State<Arc<AppState>>,
+    claims: auth::Claims,
 ) -> Json<WebRTCConfig> {
     Json(WebRTCConfig {
         sip_username: state.sip_username.clone(),
